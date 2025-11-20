@@ -1,0 +1,2 @@
+test,response,transform,statistic,df,p_value,mean_TN_Agricultural,mean_TN_Forest,sd_TN_Agricultural,sd_TN_Forest
+"t-test (unpaired, equal var)",log10TN,log10,13.910082236524664,78,7.964375796835851e-23,4.277675,0.44566249999999996,3.0268880620836667,0.26821801282510116

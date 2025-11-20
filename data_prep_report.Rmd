@@ -1,0 +1,107 @@
+---
+title: "NAWQA Nutrients: Data Preparation for Land Use vs N & P Course Project"
+output: html_document
+editor_options:
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(comment = NA, message = TRUE, warning = TRUE)
+```
+
+## Introduction
+
+This short report documents the preparation of a small, tidy dataset derived from the NAWQA nutrients repository (Manning et al., 2020). The objective is to obtain a compact, reproducible subset suitable for a course project on the impact of watershed land-use types on downstream nitrogen (TN) and phosphorus (TP) concentrations.
+
+We follow the original repository’s R Markdown logic to load the raw data and reproduce the principal joins that combine nutrient measurements, station coordinates, and StreamCat land-use percentages. We then aggregate to one record per station and draw a small, balanced random sample for teaching.
+
+## Data Sources
+
+- `NAWQA.NP` – nutrient concentrations at stream stations.
+- `nawqa.latlong` – station coordinates (latitude/longitude and identifiers).
+- `nawqa_landuse` – watershed land-use percentages (StreamCat, 2006).
+
+Loading and joins mirror the patterns in the original Rmd files contained in this repository (e.g., `nawqa_EAP_rmd_2020_02_26.Rmd`).
+
+## Variable Selection and Processing Steps
+
+- Join nutrients, coordinates, and land-use into a single data frame (`nawqa_full`).
+- Construct land-use summaries (percent of watershed):
+  - `pAG = PctCrop2006Ws + PctHay2006Ws`
+  - `pURB = PctUrbLo2006Ws + PctUrbMd2006Ws + PctUrbHi2006Ws`
+  - `pFOR = PctConif2006Ws + PctDecid2006Ws + PctMxFst2006Ws`
+- Define `LandUseType` using simple thresholds (dominant class):
+  - Agricultural if `pAG >= 50` and `pAG >= pURB` and `pAG >= pFOR`.
+  - Urban if `pURB >= 20` and `pURB >= pAG` and `pURB >= pFOR`.
+  - Forest if `pFOR >= 50` and `pFOR >= pAG` and `pFOR >= pURB`.
+  - Otherwise, Mixed.
+- Collapse multiple samples per station to a single record using station-level medians of TN and TP (NO3 and NH4 included if available).
+- Filter to stations with positive, non-missing TN and TP and with `LandUseType` ∈ {Agricultural, Urban, Forest}.
+- Draw a balanced random sample (up to 40 stations per land-use type).
+- Save the final dataset to `data/nawqa_landuse_nutrients_subset.csv`.
+
+## Load Prepared Data
+
+```{r load-prepared}
+suppressPackageStartupMessages({
+  library(dplyr)
+  library(readr)
+})
+
+csv_path <- "data/nawqa_landuse_nutrients_subset.csv"
+if (!file.exists(csv_path)) {
+  message("Prepared CSV not found — sourcing the preparation script...")
+  source("prepare_nawqa_subset.R")
+}
+
+nawqa_course_data <- readr::read_csv(csv_path, show_col_types = FALSE)
+
+summary_by_landuse <- nawqa_course_data %>%
+  group_by(LandUseType) %>%
+  summarise(
+    n = dplyr::n(),
+    mean_TN = mean(TN, na.rm = TRUE),
+    sd_TN   = sd(TN, na.rm = TRUE),
+    mean_TP = mean(TP, na.rm = TRUE),
+    sd_TP   = sd(TP, na.rm = TRUE),
+    .groups = "drop"
+  )
+```
+
+## Descriptive Statistics
+
+```{r describe}
+if (requireNamespace("knitr", quietly = TRUE)) {
+  knitr::kable(summary_by_landuse, caption = "Summary by Land Use Type")
+} else {
+  print(summary_by_landuse)
+}
+```
+
+Optional: a simple visualization (TN by land-use type).
+
+```{r optional-plot, fig.width=6, fig.height=4}
+if (requireNamespace("ggplot2", quietly = TRUE)) {
+  library(ggplot2)
+  ggplot(nawqa_course_data, aes(x = LandUseType, y = TN)) +
+    geom_boxplot(outlier.alpha = 0.4) +
+    labs(x = "Land Use Type", y = "TN (mg/L)",
+         title = "TN by Land Use Type (sampled stations)") +
+    theme_minimal()
+}
+```
+
+## Output Dataset Description
+
+- File: `data/nawqa_landuse_nutrients_subset.csv`
+- Dimensions: the file contains `r nrow(nawqa_course_data)` rows and `r ncol(nawqa_course_data)` columns.
+- Columns:
+  - `stationId` – station identifier.
+  - `statePostalCode` – two-letter state code.
+  - `placeName` – station location name.
+  - `latitude`, `longitude` – station coordinates.
+  - `LandUseType` – categorical class (Agricultural, Urban, Forest).
+  - `pAG`, `pURB`, `pFOR` – summarized land-use percentages (agriculture, urban, forest).
+  - `TN`, `TP` – median total nitrogen and total phosphorus (mg/L) per station.
+  - `NO3`, `NH4` – median nitrate+nitrite and ammonium (mg/L) per station, if available.
+

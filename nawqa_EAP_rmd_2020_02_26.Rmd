@@ -1,0 +1,1931 @@
+---
+title: "nawqaR1_rmd_2019_11_12"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+# load packages
+```{r}
+# load packages
+
+library(dplyr)
+library(plyr)
+library(lme4)
+library(ggplot2)
+library(sciplot)
+
+```
+
+# load datasets
+```{r}
+#Load files
+
+nawqa=read.csv("/Users/davidmanning/Documents/NAWQA.NP.csv") # full dataset from Water Quality portal
+names(nawqa)
+summary(nawqa$Totalnitrogen__62855_RemarkCode) # 9081 records for TN + 48 estimated, 18 less than
+summary(nawqa$Phosphorus_wu_00665_RemarkCode) # 47105 records for TP + 3752 less than, 581 est 
+summary(nawqa$Orthophosphate__00671_RemarkCode) #37,272 DIP, + 11657 less than, 2062 est
+summary(nawqa$Ammonia_wf_00608_RemarkCode) #30928 NH4, + 17276 less than, 2913 est
+summary(nawqa$NO3.NO2_wf_00631_RemarkCode) #46,840 NO3 + 3842 less than, 633 est
+
+# lat/long
+latlong <- read.csv("/Users/davidmanning/Documents/nawqa.latlong.csv")
+
+# land use
+nawqa_landuse=read.csv("/Users/davidmanning/Documents/nawqa_landuse.csv")
+
+names(nawqa)
+levels(nawqa$siteVisitPurposeDescription)
+
+
+```
+
+```{r}
+
+# subset dataframe with nutrients only, plus placeNames etc.
+nutes_only=data.frame(nawqa$stationId,nawqa$statePostalCode,nawqa$placeName,nawqa$resultDatetime,nawqa$Totalnitrogen__62855,nawqa$Totalnitrogen__62855_RemarkCode,nawqa$Phosphorus_wu_00665,nawqa$Phosphorus_wu_00665_RemarkCode,nawqa$NO3.NO2_wf_00631,nawqa$NO3.NO2_wf_00631_RemarkCode,nawqa$Ammonia_wf_00608,nawqa$Ammonia_wf_00608_RemarkCode,nawqa$Orthophosphate__00671,nawqa$Orthophosphate__00671_RemarkCode,nawqa$siteVisitPurposeDescription)
+
+na_nutes=na.omit(nutes_only)
+length(na_nutes$nawqa.stationId)
+#View(na_nutes)
+
+placeNames=na_nutes %>% count(na_nutes$nawqa.placeName)
+placeNames
+#View(placeNames)
+
+# rename colnames
+names(na_nutes)
+colnames(na_nutes)=c("stationId","statePostalCode","placeName","resultDatetime","TN","TN_code","TP","TP_code","NO3","NO3_code","NH4","NH4_code","DIP","DIP_code","siteVisit")
+
+```
+
+# merge above data frame with lat/long data
+```{r}
+names(latlong)
+
+nawqa.latlong=inner_join(na_nutes,latlong,by=c("stationId","placeName","statePostalCode"),copy=FALSE)
+length(nawqa.latlong$TN)
+summary(nawqa.latlong$TN_code)
+#View(nawqa.latlong)
+
+```
+
+# merge above nutrient/latlong data frame with land use from StreamCat
+```{r}
+names(nawqa_landuse)
+
+nawqa.frame=inner_join(nawqa.latlong,nawqa_landuse,by=c("latitude","longitude"),copy=FALSE)
+length(nawqa.frame$TN)
+names(nawqa.frame)
+
+# find % of records with TN < DIN, TP < DIP
+allposN=filter(nawqa.frame,(NO3+NH4)<TN)
+length(allpos$TN)
+length(nawqa.frame$TN)
+7954-7542 # 412 TN values < DIN
+412/7954 #0.052 or 5.2% of records
+tally(nawqa.frame,TP<DIP) # n = 215
+length(nawqa.frame$TP) 
+215/7954 #0.027 or 2.7%
+
+
+
+```
+
+# investigate values reported as "less than" or "estimated"
+```{r}
+# TN
+nawqa.frame %>% count(TN_code)
+# 17 values reported as "less than"
+# 41 values reported as "estimated"
+
+# Nitrate+nitrite
+nawqa.frame %>% count(NO3_code)
+# 407 NO3.NO2 values reported as "less than"
+# 190 values reported as "estimated"
+190/(407+190+7357)
+
+
+# Ammonium
+nawqa.frame %>% count(NH4_code) 
+# 3280 reported as "less than"
+# 1142 reported as "estimated"
+1142/(3280+3532+1142)
+
+#TP
+nawqa.frame %>% count(TP_code) 
+# 77 values reported as "less than"
+# 108 values reported as "estimated"
+
+nawqa.frame %>% count(DIP_code)
+# 731 reported as "less than"
+# 734 reported as "estimated"
+734/(731+734+6489)
+
+
+```
+
+# replace values reported as "less than" or "estimated" using MC simulations
+```{r}
+# Ammonium #
+############
+nlt_NH4=ifelse(nawqa.frame$NH4_code=="<",NA,nawqa.frame$NH4)
+nlt_NH4
+
+# matrix of empty cells for simulations
+repNH4=matrix(0,nrow=1000,ncol=length(which(is.na(nlt_NH4))))
+
+length(repNH4[,2]) # 1000 rows, check
+ncol(repNH4) # 3280 columns, check
+
+lt_NH4=which(nawqa.frame$NH4_code=="<")
+dl_NH4=nawqa.frame$NH4[lt_NH4]
+summary(dl_NH4)
+dl_NH4
+
+for (i in 1:3280){
+  repNH4[,i]=runif(1000,min=0,max=dl_NH4[i])
+}
+
+repNH4[,3] #check 3rd column
+plot(density(repNH4[,3]))
+
+summary(repNH4[,2870])
+dl_NH4[2870] # looks like correct dl value was used - (look at max value in summary)
+
+med_simNH4=apply(repNH4,2,FUN=median)
+
+# Nitrate+Nitrite #
+###################
+nlt_NO3=ifelse(nawqa.frame$NO3_code=="<",NA,nawqa.frame$NO3)
+nlt_NO3
+
+# matrix of empty cells for simulations
+repNO3=matrix(0,nrow=1000,ncol=length(which(is.na(nlt_NO3))))
+
+length(repNO3[,2]) # 1000 rows, check
+ncol(repNO3) # 407 columns, check
+
+lt_NO3=which(nawqa.frame$NO3_code=="<")
+dl_NO3=nawqa.frame$NO3[lt_NO3]
+summary(dl_NO3)
+dl_NO3
+
+for (i in 1:407){
+  repNO3[,i]=runif(1000,min=0,max=dl_NO3[i])
+}
+
+repNO3[,300] #check 300th column
+plot(density(repNO3[,300]))
+
+summary(repNO3[,300])
+dl_NO3[300] # looks like correct dl value was used - (look at max value in summary)
+
+med_simNO3=apply(repNO3,2,FUN=median)
+
+# TN #
+######
+nlt_TN=ifelse(nawqa.frame$TN_code=="<",NA,nawqa.frame$TN)
+nlt_TN
+
+# matrix of empty cells for simulations
+repTN=matrix(0,nrow=1000,ncol=length(which(is.na(nlt_TN))))
+
+length(repTN[,2]) # 1000 rows, check
+ncol(repTN) # 17 columns, check
+
+lt_TN=which(nawqa.frame$TN_code=="<")
+dl_TN=nawqa.frame$TN[lt_TN]
+summary(dl_TN)
+dl_TN
+
+for (i in 1:17){
+  repTN[,i]=runif(1000,min=0,max=dl_TN[i])
+}
+
+repTN[,3] #check 3rd column
+plot(density(repTN[,3]))
+
+summary(repTN[,3])
+dl_TN[3] # looks like correct dl value was used - (look at max value in summary)
+
+med_simTN=apply(repTN,2,FUN=median)
+
+# TP #
+######
+nlt_TP=ifelse(nawqa.frame$TP_code=="<",NA,nawqa.frame$TP)
+nlt_TP
+
+# matrix of empty cells for simulations
+repTP=matrix(0,nrow=1000,ncol=length(which(is.na(nlt_TP))))
+
+length(repTP[,2]) # 1000 rows, check
+ncol(repTP) # 77 columns, check
+
+lt_TP=which(nawqa.frame$TP_code=="<")
+dl_TP=nawqa.frame$TP[lt_TP]
+summary(dl_TP)
+dl_TP
+
+for (i in 1:77){
+  repTP[,i]=runif(1000,min=0,max=dl_TP[i])
+}
+
+repTP[,3] #check 3rd column
+plot(density(repTP[,3]))
+
+summary(repTP[,3])
+dl_TP[3] # looks like correct dl value was used - (look at max value in summary)
+
+med_simTP=apply(repTP,2,FUN=median)
+
+# DIP #
+#######
+
+nlt_DIP=ifelse(nawqa.frame$DIP_code=="<",NA,nawqa.frame$DIP)
+nlt_DIP
+
+# matrix of empty cells for simulations
+repDIP=matrix(0,nrow=1000,ncol=length(which(is.na(nlt_DIP))))
+
+length(repDIP[,2]) # 1000 rows, check
+ncol(repDIP) # 731 columns, check
+
+lt_DIP=which(nawqa.frame$DIP_code=="<")
+dl_DIP=nawqa.frame$DIP[lt_DIP]
+summary(dl_DIP)
+dl_DIP
+
+for (i in 1:731){
+  repDIP[,i]=runif(1000,min=0,max=dl_DIP[i])
+}
+
+repDIP[,3] #check 3rd column
+plot(density(repDIP[,3]))
+
+summary(repDIP[,3])
+dl_DIP[3] # looks like correct dl value was used - (look at max value in summary)
+
+med_simDIP=apply(repDIP,2,FUN=median)
+
+
+# ---------------------------------------------------------------#
+# replace "less than" values in nawqa.frame with simulated values#
+# ---------------------------------------------------------------#
+
+NH4_mc_lt=ifelse(nawqa.frame$NH4_code=="<",med_simNH4,nawqa.frame$NH4)
+NO3_mc_lt=ifelse(nawqa.frame$NO3_code=="<",med_simNO3,nawqa.frame$NO3)
+TN_mc_lt=ifelse(nawqa.frame$TN_code=="<",med_simTN,nawqa.frame$TN)
+TP_mc_lt=ifelse(nawqa.frame$TP_code=="<",med_simTP,nawqa.frame$TP)
+DIP_mc_lt=ifelse(nawqa.frame$DIP_code=="<",med_simDIP,nawqa.frame$DIP)
+
+
+summary(NH4_mc_lt) # check
+length(NH4_mc_lt) # check
+
+
+
+```
+
+## replace values reported as "estimated" with MC simulations
+# in this case, normal dist is used, with SD according to analyte-specific precision
+```{r}
+# Ammonium #
+############
+est_NH4=ifelse(nawqa.frame$NH4_code=="E",NA,nawqa.frame$NH4)
+est_NH4
+
+
+# matrix of empty cells for simulations
+matNH4=matrix(0,nrow=1000,ncol=length(which(is.na(est_NH4))))
+
+length(matNH4[,2]) # 1000 rows, check
+ncol(matNH4) # 1142 columns, check
+
+e_NH4=which(nawqa.frame$NH4_code=="E")
+eval_NH4=nawqa.frame$NH4[e_NH4]
+summary(eval_NH4)
+eval_NH4
+
+for (i in 1:1142){
+  matNH4[,i]=rnorm(1000,mean=eval_NH4[i],sd=0.001)
+}
+
+matNH4[,3] #check 3rd column
+plot(density(matNH4[,3]))
+
+summary(matNH4[,3])
+eval_NH4[3] # looks like correct dl value was used - (look at max value in summary)
+
+med_estNH4=apply(matNH4,2,FUN=median)
+
+# Nitrate+Nitrite #
+###################
+est_NO3=ifelse(nawqa.frame$NO3_code=="E",NA,nawqa.frame$NO3)
+est_NO3
+
+# matrix of empty cells for simulations
+matNO3=matrix(0,nrow=1000,ncol=length(which(is.na(est_NO3))))
+
+length(matNO3[,2]) # 1000 rows, check
+ncol(matNO3) # 190 columns, check
+
+e_NO3=which(nawqa.frame$NO3_code=="E")
+eval_NO3=nawqa.frame$NO3[e_NO3]
+summary(eval_NO3)
+eval_NO3
+
+for (i in 1:190){
+  matNO3[,i]=rnorm(1000,mean=eval_NO3[i],sd=0.004)
+}
+
+matNO3[,3] #check 3rd column
+plot(density(matNO3[,3]))
+
+summary(matNO3[,3])
+eval_NO3[3] # looks like correct dl value was used - (look at max value in summary)
+
+med_estNO3=apply(matNO3,2,FUN=median)
+
+# TN #
+######
+est_TN=ifelse(nawqa.frame$TN_code=="E",NA,nawqa.frame$TN)
+est_TN
+
+# matrix of empty cells for simulations
+matTN=matrix(0,nrow=1000,ncol=length(which(is.na(est_TN))))
+
+length(matTN[,2]) # 1000 rows, check
+ncol(matTN) # 41 columns, check
+
+e_TN=which(nawqa.frame$TN_code=="E")
+eval_TN=nawqa.frame$TN[e_TN]
+summary(eval_TN)
+eval_TN
+
+for (i in 1:41){
+  matTN[,i]=rnorm(1000,mean=eval_TN[i],sd=0.005)
+}
+
+matTN[,3] #check 3rd column
+plot(density(matTN[,3]))
+
+summary(matTN[,3])
+eval_TN[3] # looks like correct dl value was used - (look at max value in summary)
+
+med_estTN=apply(matTN,2,FUN=median)
+
+# TP #
+######
+est_TP=ifelse(nawqa.frame$TP_code=="E",NA,nawqa.frame$TP)
+est_TP
+
+# matrix of empty cells for simulations
+matTP=matrix(0,nrow=1000,ncol=length(which(is.na(est_TP))))
+
+length(matTP[,2]) # 1000 rows, check
+ncol(matTP) # 108 columns, check
+
+e_TP=which(nawqa.frame$TP_code=="E")
+eval_TP=nawqa.frame$TP[e_TP]
+summary(eval_TP)
+eval_TP
+
+for (i in 1:77){
+  matTP[,i]=rnorm(1000,mean=eval_TP[i],sd=0.005)
+}
+
+matTP[,3] #check 3rd column
+plot(density(matTP[,3]))
+
+summary(matTP[,3])
+eval_TP[3] # looks like correct dl value was used - (look at max value in summary)
+
+med_estTP=apply(matTP,2,FUN=median)
+
+# DIP #
+#######
+
+est_DIP=ifelse(nawqa.frame$DIP_code=="E",NA,nawqa.frame$DIP)
+est_DIP
+
+# matrix of empty cells for simulations
+matDIP=matrix(0,nrow=1000,ncol=length(which(is.na(est_DIP))))
+
+length(matDIP[,2]) # 1000 rows, check
+ncol(matDIP) # 734 columns, check
+
+e_DIP=which(nawqa.frame$DIP_code=="E")
+eval_DIP=nawqa.frame$DIP[e_DIP]
+summary(eval_DIP)
+eval_DIP
+
+for (i in 1:734){
+  matDIP[,i]=rnorm(1000,mean=eval_DIP[i],sd=0.005)
+}
+
+matDIP[,3] #check 3rd column
+plot(density(matDIP[,3]))
+
+summary(matDIP[,3])
+dl_DIP[3] # looks like correct dl value was used - (look at max value in summary)
+
+med_estDIP=apply(matDIP,2,FUN=median)
+
+
+# ---------------------------------------------------------------#
+# replace "estimated" values in nawqa.frame with simulated values#
+# ---------------------------------------------------------------#
+
+NH4_mc=ifelse(nawqa.frame$NH4_code=="E",med_estNH4,NH4_mc_lt)
+NO3_mc=ifelse(nawqa.frame$NO3_code=="E",med_estNO3,NO3_mc_lt)
+TN_mc=ifelse(nawqa.frame$TN_code=="E",med_estTN,TN_mc_lt)
+TP_mc=ifelse(nawqa.frame$TP_code=="E",med_estTP,TP_mc_lt)
+DIP_mc=ifelse(nawqa.frame$DIP_code=="E",med_estDIP,DIP_mc_lt)
+
+
+summary(NH4_mc) # check
+length(NH4_mc) # check
+
+```
+
+# data frame with MC simulations data
+```{r}
+nawqa.frame_v1=data.frame(nawqa.frame,NH4_mc,NO3_mc,TN_mc,TP_mc,DIP_mc)
+
+nawqa.frame_v1 <- nawqa.frame_v1 %>% mutate(
+  DIN = NO3_mc+NH4_mc
+)
+
+names(nawqa.frame_v1)
+
+# check for TN values < DIN
+TN_neg=which(nawqa.frame_v1$TN<nawqa.frame_v1$DIN)
+nawqa.frame_v2=nawqa.frame_v1[-TN_neg,]
+
+TP_neg=which(nawqa.frame_v2$TP<nawqa.frame_v2$DIP_mc)
+TP_neg
+
+nawqa.frame_v3=nawqa.frame_v2[-TP_neg,]
+
+summary(nawqa.frame_v3$TP-nawqa.frame_v3$DIP_mc) # check for neg values
+summary(nawqa.frame_v3$TN-nawqa.frame_v3$DIN) # check for neg values
+
+levels(nawqa.frame_v3$siteVisit)
+length(which(nawqa.frame_v3$siteVisit=="EXTREME HIGH FLOW, SURFACE-WATER"))
+length(which(nawqa.frame_v3$siteVisit=="STORM HYDROGRAPH, SURFACE-WATER"))
+(68+12)/nrow(nawqa.frame_v3)
+
+```
+
+# sensitivity analysis: comparing summary data for N:P ratios with and without simulated data
+```{r}
+
+DIN_SRP_test=(nawqa.frame_v3$NO3+nawqa.frame_v3$NH4)/nawqa.frame_v3$DIP*(31/14)
+DIN_SRP_mc=nawqa.frame_v3$DIN/nawqa.frame_v3$DIP_mc*31/14
+
+?ks.test
+
+ks.test(DIN_SRP_test,DIN_SRP_mc)
+
+summary(DIN_SRP_test)
+summary(DIN_SRP_mc)
+
+```
+
+
+# Calculate particulate N, P estimates
+```{r}
+
+propPN # from nawqa_rerieval_2018_11_15.Rmd
+summary(propPN)
+propPP # from nawqa_rerieval_2018_11_15.Rmd
+summary(propPP)
+propPP=na.omit(propPP)
+summary(propPP)
+
+# particulate N corrected for DON
+PN_diff=nawqa.frame_v3$TN-nawqa.frame_v3$DIN
+summary(PN_diff)
+negPN=which(PN_diff<0)
+
+
+PNcorr=matrix(0,nrow=1000,ncol=length(PN_diff))
+PNcorr[,3]
+
+for (i in 1:length(PN_diff)){
+  PNcorr[,i] = PN_diff[i]*sample(propPN,1000,replace=TRUE)
+}
+
+PNcorr[,3]
+par(mar=c(5,6,2,2))
+plot(density(PNcorr[,2]),main="PN values corrected for DON",cex.lab=2,cex.axis=2,xlab="PN corrected (mg/L); N = 1000")
+abline(v=median(PNcorr[,2]),col="red")
+
+# particulate P corrected for DOP
+PP_diff=nawqa.frame_v3$TP-nawqa.frame_v3$DIP_mc
+
+PPcorr=matrix(0,nrow=1000,ncol=length(PP_diff))
+PPcorr[,4]
+
+for(i in 1:length(PP_diff)){
+  PPcorr[,i] = PP_diff[i]*sample(propPP,1000,replace=TRUE)
+}
+
+PPcorr[,6]
+plot(density(PPcorr[,6]))
+
+
+# generate data frames with median values from 1000 simulations
+med_PNcorr=apply(PNcorr,2,median)
+negPN=which(med_PNcorr<=0) # check for negative PN values
+negPN
+naPN=which(is.na(med_PNcorr))
+
+med_PPcorr=apply(PPcorr,2,median,na.rm=T)
+negPP=which(med_PPcorr<=0) # check for negative PP values
+negPP
+naPP=which(is.na(med_PPcorr))
+
+# test 'sample' vs. straight correction by median
+PN_med=PN_diff*median(propPN,na.rm=T)
+PP_med=PP_diff*median(propPP,na.rm=T)
+
+plot(PN_med~med_PNcorr)
+abline(a=0,b=1)
+
+```
+
+# calculate PN, PP estimates using 'sample' instead of median.
+```{r}
+
+sort_PN=apply(PNcorr,2,sort)
+sort_PN[,1]
+
+PPcorr[,2]
+sort_PP=apply(PPcorr,2,sort)
+sort_PP[,2]
+
+?sample
+samp_PNcorr=matrix(0,nrow=1000,ncol=1)
+for(i in 1:ncol(sort_PN)){
+samp_PNcorr[i]=sample(sort_PN[250:750,i],1,replace=TRUE)
+}
+which(samp_PNcorr<=0)
+
+samp_PPcorr=matrix(0,nrow=1000,ncol=1)
+for(i in 1:ncol(sort_PP)){
+samp_PPcorr[i]=sample(sort_PP[250:750,i],1,replace=TRUE)
+}
+which(is.na(samp_PPcorr))
+which(samp_PPcorr<=0)
+
+samp_PNPP=(samp_PNcorr/samp_PPcorr)*31/14
+which(samp_PNPP<=0)
+
+plot(samp_PNcorr~med_PNcorr)
+plot(samp_PPcorr~med_PPcorr)
+
+plot(dat$samp_PNPP~dat$PN_PP,log="xy")
+
+# test 'sample' vs. straight correction by median
+PN_med=PN_diff*median(propPN,na.rm=T)
+PP_med=PP_diff*median(propPP,na.rm=T)
+
+plot(PN_med~samp_PNcorr)
+abline(a=0,b=1)
+
+
+# plots for illustrative purposes
+
+par(mar=c(5,6,2,2))
+plot(density(PNcorr[,24]),main="PN values corrected for DOP",cex.lab=2,cex.axis=2,xlab="PN corrected (mg/L); N = 1000")
+abline(v=sort_PN[250,24],col="red")
+abline(v=sort(sort_PN[750,24]),col="red")
+
+par(mar=c(5,6,2,2))
+plot(density(PPcorr[,24]),main="PP values corrected for DOP",cex.lab=2,cex.axis=2,xlab="PP corrected (mg/L); N = 1000")
+abline(v=sort_PP[250,24],col="red")
+abline(v=sort(sort_PP[750,24]),col="red")
+
+
+
+
+```
+
+# new data.frame with med_PNcorr, med_PPcorr, samp_PNcorr, samp_PPcorr
+```{r}
+
+dat=data.frame(nawqa.frame_v3,med_PNcorr,med_PPcorr,samp_PNcorr,samp_PPcorr)
+length(dat$med_PNcorr)
+length(dat[,1])
+length(unique(dat$stationId))
+
+```
+
+# calculate N:P ratios
+```{r}
+
+dat <- dat %>% mutate(
+  DIN_DIP = DIN/DIP_mc*(31/14)
+)
+
+summary(dat$DIN_DIP)
+
+TP_0=which(dat$TP_mc==0)
+dat=dat[-TP_0,]
+
+dat <- dat %>% mutate(
+  TN_TP=TN_mc/TP_mc*(31/14)
+)
+summary(dat$TN_TP)
+
+dat <- dat %>% mutate(
+  PN_PP=med_PNcorr/med_PPcorr*(31/14)
+)
+
+dat <- dat %>% mutate(
+  samp_PNPP=samp_PNcorr/samp_PPcorr*(31/14)
+)
+summary(dat$samp_PNPP)
+which(dat$samp_PNPP==0)
+
+dat <- dat %>% mutate(
+  DON = TN_mc - DIN - samp_PNcorr
+)
+
+dat <- dat %>% mutate(
+  DOP = TP_mc - DIP_mc - samp_PPcorr
+)
+
+dat <- dat %>% mutate(
+  DON_DOP = (DON/DOP)*31/14
+)
+
+dat <- dat %>% mutate(
+  NH4_SRP=(NH4_mc/DIP_mc)*31/14
+)
+
+
+```
+
+
+# Figure 1: density plots of concs, and biplots of TN vs. TP, DIN vs. DIP, PN vs. PP with thresholds for stream biota responses (as reported in Evans-White et al. 2013)
+```{r}
+par(mfrow=c(3,3))
+par(mar=c(4,5,2,2))
+par(oma=c(0,0,0,0),bty="o")
+
+# TN, TP
+plot(density(log10(dat$TN_mc)),xlab="",main="",ylim=c(0,1.2),xlim=c(-3,2),lwd=3,col="white",xaxt="n",ylab="",zero.line=FALSE)
+axis(side=1,at=c(-3,-2,-1,0,1,2),labels=c(0.001,0.01,0.1,1,10,100))
+mtext("Density",side=2,line=2.5,cex=1)
+mtext("TN (mg/L)",side=1,line=2.5,cex=1)
+
+rect(log10(1.169),-1,5,2,col=alpha("red",0.5),border="transparent")
+rect(log10(1.92),-1,5,2,col=alpha("red",0.5),border="transparent")
+rect(log10(1.83),-1,5,2,col=alpha("black",0.5),border="transparent",density=50,angle=-45)
+
+lines(density(log10(dat$TN_mc)),lwd=3,lty=1)
+
+text(-1,1.19,"Benthic algae")
+text(-1,1.09,"Macroinvertebrates")
+text(-1,0.99,"Fish")
+
+arrows(-0.5,1.19,log10(1.169),1.19,length=0.05)
+arrows(-0.3,1.09,log10(1.92),1.09,length=0.05)
+arrows(-0.75,0.99,log10(1.92),0.99,length=0.05)
+
+abline(v=median(log10(dat$TN_mc)),lty=2,lwd=1)
+mtext("a",at=1.75)
+
+plot(density(log10(dat$TP_mc)),xlab="",main="",ylim=c(0,1.2),xlim=c(-3,2),lwd=3,col="white",xaxt="n",ylab="",zero.line=FALSE)
+
+rect(log10(0.074),-1,5,2,col=alpha("red",0.5),border="transparent")
+rect(log10(0.15),-1,5,2,col=alpha("red",0.5),border="transparent")
+rect(log10(0.139),-1,5,2,col=alpha("black",0.5),border="transparent",density=50)
+lines(density(log10(dat$TP_mc)),lwd=3)
+axis(side=1,at=c(-3,-2,-1,0,1,2),labels=c(0.001,0.01,0.1,1,10,100))
+mtext("TP (mg/L)",side=1,line=2.5,cex=1)
+
+text(-2,1.19,"Benthic algae")
+text(-2,1.09,"Macroinvertebrates")
+text(-2,0.99,"Fish")
+
+arrows(-1.5,1.19,log10(0.074),1.19,length=0.05)
+arrows(-1.3,1.09,log10(0.15),1.09,length=0.05)
+arrows(-1.75,0.99,log10(0.139),0.99,length=0.05)
+
+abline(v=median(log10(dat$TP_mc)),lwd=1,lty=2)
+mtext("b",at=1.75)
+
+plot(log10(dat$TN_mc)~log10(dat$TP_mc),cex=0.001,ylim=c(-3,1.5),xlim=c(-3,1.5),ylab="",xaxt="n",yaxt="n",xlab="",col="white")
+axis(side=1,at=c(-3,-2,-1,0,1,2),labels=c(0.001,0.01,0.1,1,10,100))
+axis(side=2,at=c(-3,-2,-1,0,1,2),labels=c(0.001,0.01,0.1,1,10,100))
+mtext("TP (mg/L)",side=1,line=2.5,cex=1)
+mtext("TN (mg/L)",side=2,line=2.5,cex=1)
+rect(log10(0.074),-3.5,5,5,col=alpha("red",0.5),border="transparent")
+rect(-3.5,log10(1.169),5,5,col=alpha("red",0.5),border="transparent")
+rect(log10(0.15),-3.5,5,5,col=alpha("red",0.5),border="transparent")
+rect(-3.5,log10(1.92),5,5,col=alpha("red",0.5),border="transparent")
+rect(log10(0.139),-3.5,5,5,col=alpha("black",0.5),border="transparent",density=50)
+rect(-3.5,log10(1.83),5,5,col=alpha("black",0.5),border="transparent",density=50,angle=-45)
+abline(a=log10(7.2),b=log10(7.2))
+points(log10(dat$TN_mc)~log10(dat$TP_mc),cex=0.1)
+mtext("c",at=1.5)
+
+# DIN, DIP
+plot(density(log10(dat$DIN)),xlab="",ylab="",main="",ylim=c(0,1.2),xlim=c(-3,2),lwd=3,col="white",xaxt="n",zero.line=FALSE)
+rect(log10(0.186),-1,5,2,col=alpha("red",0.5),border="transparent")
+rect(log10(0.052),-1,5,2,col=alpha("red",0.5),border="transparent")
+lines(density(log10(dat$DIN)),lwd=3,xlab="")
+axis(side=1,at=c(-3,-2,-1,0,1,2),labels=c(0.001,0.01,0.1,1,10,100))
+mtext("DIN (mg/L)",side=1,line=2.5,cex=1)
+mtext("Density",side=2,line=2.5,cex=1)
+abline(v=median(log10(dat$DIN)),lty=2,lwd=1)
+
+text(-2.5,1.19,"Algal growth rates")
+text(-2.4,1.09,"Litter breakdown rates")
+
+arrows(-1.85,1.19,log10(0.186),1.19,length=0.05)
+arrows(-1.65,1.09,log10(0.052),1.09,length=0.05)
+
+mtext("d",at=1.75)
+
+
+plot(density(log10(dat$DIP_mc)),xlab="",ylab="",main="",ylim=c(0,1.2),xlim=c(-3,2),lwd=3,col="white",xaxt="n",zero.line=FALSE)
+rect(log10(0.0042),-1,5,2,col=alpha("red",0.5),border="transparent")
+rect(log10(0.021),-1,5,2,col=alpha("red",0.5),border="transparent")
+lines(density(log10(dat$DIP_mc)),lwd=3)
+axis(side=1,at=c(-3,-2,-1,0,1,2),labels=c(0.001,0.01,0.1,1,10,100))
+mtext("DIP (mg/L)",side=1,line=2.5,cex=1)
+abline(v=median(log10(dat$DIP_mc)),lty=2,lwd=1)
+
+text(-0.5,1.19,"Algal growth rates")
+text(-0.5,1.09,"Litter breakdown rates")
+
+arrows(-1.1,1.19,log10(0.0042),1.19,length=0.05)
+arrows(-1.25,1.09,log10(0.021),1.09,length=0.05)
+
+mtext("e",at=1.75)
+
+plot(log10(dat$DIN)~log10(dat$DIP_mc),cex=0.001,ylim=c(-3,2),xlim=c(-3,2),ylab="",xaxt="n",yaxt="n",xlab="",col="white")
+axis(side=1,at=c(-3,-2,-1,0,1,2),labels=c(0.001,0.01,0.1,1,10,100))
+axis(side=2,at=c(-3,-2,-1,0,1,2),labels=c(0.001,0.01,0.1,1,10,100))
+mtext("DIP (mg/L)",side=1,line=2.5,cex=1)
+mtext("DIN (mg/L)",side=2,line=2.5,cex=1)
+#rect(log10(0.005),log10(0.016),log10(0.021),log10(0.052),col=alpha("gray",0.5),lwd=3)
+rect(-3.5,log10(0.186),5,5,col=alpha("red",0.5),border="transparent")
+rect(log10(0.0042),-3.5,5,5,col=alpha("red",0.5),border="transparent")
+rect(-3.5,log10(0.052),5,5,col=alpha("red",0.5),border="transparent")
+rect(log10(0.021),-3.5,5,5,col=alpha("red",0.5),border="transparent")
+points(log10(dat$DIN)~log10(dat$DIP_mc),cex=0.1)
+abline(a=log10(7.2),b=log10(7.2))
+#par(fig = c(0.7,0.93,0.19,0.5), mar=c(0,0,0,0), new = T,bty="n")  
+#boxplot(log10(dat$DIN_DIP),outline=F,ylab="",yaxt="n",bty="n",ylim=c(-1,5))
+#mtext(side=2,"DIN:DIP",line=0.5)
+#axis(side=2,at=c(-1,0,1,2,3,4),labels=c(0.1,1,10,100,1000,10000),line=-1.5)
+mtext("f",at=1.75)
+
+# PN, PP
+plot(density(log10(dat$samp_PNcorr)),ylab="",xlab="",main="",ylim=c(0,1),xlim=c(-3,2),lwd=3,col="black",xaxt="n",zero.line=FALSE)
+#rect(log10(0.016),-1,log10(0.052),2,col=alpha("gray",0.25),lwd=0)
+axis(side=1,at=c(-3,-2,-1,0,1,2),labels=c(0.001,0.01,0.1,1,10,100))
+mtext("PN (mg/L)",side=1,line=2.5,cex=1)
+abline(v=median(log10(dat$samp_PNcorr)),lty=2,lwd=1)
+#abline(v=median(log10(dat$samp_PNcorr)+IQR(log10(dat$samp_PNcorr))/2),lty=3)
+#abline(v=median(log10(dat$samp_PNcorr)-IQR(log10(dat$samp_PNcorr))/2),lty=3)
+mtext("g",at=1.75)
+mtext("Density",side=2,line=2.5,cex=1)
+
+
+plot(density(log10(dat$samp_PPcorr)),xlab="",ylab="",main="",ylim=c(0,1),xlim=c(-3,2),lwd=3,col="black",xaxt="n",zero.line=FALSE)
+#rect(log10(0.005),-1,log10(0.021),2,col=alpha("gray",0.25),lwd=0)
+axis(side=1,at=c(-3,-2,-1,0,1,2),labels=c(0.001,0.01,0.1,1,10,100))
+mtext("PP (mg/L)",side=1,line=2.5,cex=1)
+abline(v=median(log10(dat$samp_PPcorr)),lty=2,lwd=1)
+#abline(v=median(log10(dat$samp_PPcorr)+IQR(log10(dat$samp_PPcorr))/2),lty=3)
+#abline(v=median(log10(dat$samp_PPcorr)-IQR(log10(dat$samp_PPcorr))/2),lty=3)
+mtext("h",at=1.75)
+
+#par(fig=c(0,1,0,1),mar=c(4,5,2,2))
+plot(log10(dat$samp_PNcorr)~log10(dat$samp_PPcorr),cex=0.1,ylim=c(-3,2),xlim=c(-3,2),ylab="",xaxt="n",yaxt="n",xlab="")
+axis(side=1,at=c(-3,-2,-1,0,1,2),labels=c(0.001,0.01,0.1,1,10,100))
+axis(side=2,at=c(-3,-2,-1,0,1,2),labels=c(0.001,0.01,0.1,1,10,100))
+mtext("PP (mg/L)",side=1,line=2.5,cex=1)
+mtext("PN (mg/L)",side=2,line=2.5,cex=1)
+#rect(log10(0.005),log10(0.016),log10(0.021),log10(0.052),col=alpha("gray",0.5),lwd=3)
+abline(a=log10(7.2),b=log10(7.2))
+#par(fig = c(0.7,0.93,0.19,0.5), mar=c(0,0,0,0), new = T,bty="n")  
+#boxplot(log10(dat$samp_PNPP),outline=F,ylab="",yaxt="n",bty="n",ylim=c(-1,2))
+#mtext(side=2,"PN:PP",line=0.5)
+#axis(side=2,at=c(-1,0,1,2),labels=c(0.1,1,10,100),line=-1.5)
+mtext("i",at=1.75)
+
+```
+
+# What percentage of values are above (maximum) reported thresholds?
+```{r}
+
+# 1.162 (benthic algae TN)
+# 1.92 (inverts TN)
+# 1.83 (fish TN)
+
+length(which(dat$TN_mc>1.162))
+4464/nrow(dat) # 58.3%
+
+length(which(dat$TN_mc>1.92))
+2998/nrow(dat) #39.2%
+
+length(which(dat$TN_mc>1.83))
+3114/nrow(dat) # 40.7%
+
+# 0.074 (algae TP)
+# 0.15 (inverts TP)
+# 0.139 (fish TP)
+
+length(which(dat$TP_mc>0.074))
+4335/nrow(dat) #56.6%
+
+length(which(dat$TP_mc>0.15))
+2963/nrow(dat) #38.7%
+
+length(which(dat$TP_mc>0.139))
+2868/nrow(dat) #37.4%
+
+# 0.186 algal growth DIN
+# 0.052 litter breakdown DIN
+
+length(which(dat$DIN>0.186))
+6480/nrow(dat) #84.7%
+
+length(which(dat$DIN>0.052))
+7200/nrow(dat) #94.1%
+
+# 0.0042 algal growth DIP
+# 0.021 litter breakdown DIP
+
+length(which(dat$DIP_mc>0.0042))
+6664/nrow(dat) #87.1%
+
+length(which(dat$DIP_mc>0.021))
+4501/nrow(dat) #58%
+
+length(which(DEV_10$TN>1.162))
+176/nrow(DEV_10)
+length(which(DEV_10$TP>0.074))
+223/nrow(DEV_10)
+
+length(which(dat$TP_mc)>0.028)
+median(dat$TP_mc)
+0.0905/0.028
+
+```
+
+# Figure 2: violin plots
+```{r}
+vio_NPdat=data.frame(c(dat$TN_TP,dat$DIN_DIP,dat$samp_PNPP),c(rep("TN:TP",nrow(dat)),rep("DIN:DIP",nrow(dat)),rep("PN:PP",nrow(dat))))
+head(vio_NPdat)
+colnames(vio_NPdat)=c("NP_ratio","type")
+
+v <- ggplot(data=vio_NPdat,aes(x=factor(type),y=NP_ratio)) + geom_violin(trim=TRUE) + geom_boxplot(width=0.1,outlier.shape=NA) + labs(x="Nutrient fraction",y="N:P ratio") + scale_y_log10(breaks=c(0.001,0.01,0.1,1,10,100,1000,10000),labels=c("0.001","0.01","0.1","1","10","100","1000","10000")) + theme_classic() + scale_x_discrete(labels=c("Dissolved","Particulate","Total"))
+v
+
+```
+
+
+# figure 3: data prep - quantile loess plots of concentrations. Be sure to run file 'quantile_LOESS.Rmd' prior to making the plots.
+```{r}
+#install.packages("zoo")
+library(zoo)
+
+# quantile_LOESS function from quantile_LOESS.RMD
+pAG=dat$PctCrop2006Ws+dat$PctHay2006Ws
+pURB=dat$PctUrbLo2006Ws+dat$PctUrbMd2006Ws+dat$PctUrbHi2006Ws
+pFOR=dat$PctConif2006Ws+dat$PctDecid2006Ws+dat$PctMxFst2006Ws
+pDEV=pAG+pURB
+length(pDEV)
+plot(pDEV)
+
+# filter data based on land use bins (window= 10% around 10, 25, 50, 75, 90th percentiles)
+DEV_10=filter(dat,pDEV>5,pDEV<15)
+DEV_25=filter(dat,pDEV>20,pDEV<30)
+DEV_50=filter(dat,pDEV>45,pDEV<55)
+DEV_75=filter(dat,pDEV>70,pDEV<80)
+DEV_90=filter(dat,pDEV>85,pDEV<95)
+
+quants=c(0.1,0.25,0.5,0.75,0.9)
+
+summary_10=apply(DEV_10[,c("TN_mc","DIN","med_PNcorr","samp_PNcorr","TP_mc","DIP_mc","med_PPcorr","samp_PPcorr")],2,quantile,probs=quants)
+summary_25=apply(DEV_25[,c("TN_mc","DIN","med_PNcorr","samp_PNcorr","TP_mc","DIP_mc","med_PPcorr","samp_PPcorr")],2,quantile,probs=quants)
+summary_50=apply(DEV_50[,c("TN_mc","DIN","med_PNcorr","samp_PNcorr","TP_mc","DIP_mc","med_PPcorr","samp_PPcorr")],2,quantile,probs=quants)
+summary_75=apply(DEV_75[,c("TN_mc","DIN","med_PNcorr","samp_PNcorr","TP_mc","DIP_mc","med_PPcorr","samp_PPcorr")],2,quantile,probs=quants)
+summary_90=apply(DEV_90[,c("TN_mc","DIN","med_PNcorr","samp_PNcorr","TP_mc","DIP_mc","med_PPcorr","samp_PPcorr")],2,quantile,probs=quants)
+
+write.csv(rbind(summary_10,summary_25,summary_50,summary_75,summary_90),file="/Users/davidmanning/Documents/nawqa_summaries_2019_06_06.csv")
+
+# set up data for loess plots
+X.ag=jitter(pAG) # if multiple values for same x, then x must be jittered
+Y.din=dat$DIN # din concentrations
+X.dev=jitter(pDEV)
+Y.din=log10(dat$DIN)
+Y.TN=log10(dat$TN_mc)
+Y.PN=log10(dat$samp_PNcorr)
+Y.SRP=log10(dat$DIP_mc)
+Y.TP=log10(dat$TP_mc)
+Y.PP=log10(dat$samp_PPcorr)
+
+QL.DIN.DEV.10=Quantile.loess(Y=Y.din,X=X.dev,the.quant=0.1,window.size=10,window.alignment=c("center"))
+QL.DIN.DEV.25=Quantile.loess(Y=Y.din,X=X.dev,the.quant=0.25,window.size=10,window.alignment=c("center"))
+QL.DIN.DEV.50=Quantile.loess(Y=Y.din,X=X.dev,the.quant=0.50,window.size=10,window.alignment=c("center"))
+QL.DIN.DEV.75=Quantile.loess(Y=Y.din,X=X.dev,the.quant=0.75,window.size=10,window.alignment=c("center"))
+QL.DIN.DEV.90=Quantile.loess(Y=Y.din,X=X.dev,the.quant=0.90,window.size=10,window.alignment=c("center"))
+
+QL.TN.DEV.10=Quantile.loess(Y=Y.TN,X=X.dev,the.quant=0.1,window.size=10,window.alignment=c("center"))
+QL.TN.DEV.25=Quantile.loess(Y=Y.TN,X=X.dev,the.quant=0.25,window.size=10,window.alignment=c("center"))
+QL.TN.DEV.50=Quantile.loess(Y=Y.TN,X=X.dev,the.quant=0.50,window.size=10,window.alignment=c("center"))
+QL.TN.DEV.75=Quantile.loess(Y=Y.TN,X=X.dev,the.quant=0.75,window.size=10,window.alignment=c("center"))
+QL.TN.DEV.90=Quantile.loess(Y=Y.TN,X=X.dev,the.quant=0.90,window.size=10,window.alignment=c("center"))
+
+QL.TN.DEV.10=Quantile.loess(Y=Y.TN,X=X.dev,the.quant=0.1,window.size=10,window.alignment=c("center"))
+QL.TN.DEV.25=Quantile.loess(Y=Y.TN,X=X.dev,the.quant=0.25,window.size=10,window.alignment=c("center"))
+QL.TN.DEV.50=Quantile.loess(Y=Y.TN,X=X.dev,the.quant=0.50,window.size=10,window.alignment=c("center"))
+QL.TN.DEV.75=Quantile.loess(Y=Y.TN,X=X.dev,the.quant=0.75,window.size=10,window.alignment=c("center"))
+QL.TN.DEV.90=Quantile.loess(Y=Y.TN,X=X.dev,the.quant=0.90,window.size=10,window.alignment=c("center"))
+
+QL.PN.DEV.10=Quantile.loess(Y=Y.PN,X=X.dev,the.quant=0.1,window.size=10,window.alignment=c("center"),na.rm=TRUE)
+QL.PN.DEV.25=Quantile.loess(Y=Y.PN,X=X.dev,the.quant=0.25,window.size=10,window.alignment=c("center"))
+QL.PN.DEV.50=Quantile.loess(Y=Y.PN,X=X.dev,the.quant=0.50,window.size=10,window.alignment=c("center"))
+QL.PN.DEV.75=Quantile.loess(Y=Y.PN,X=X.dev,the.quant=0.75,window.size=10,window.alignment=c("center"))
+QL.PN.DEV.90=Quantile.loess(Y=Y.PN,X=X.dev,the.quant=0.90,window.size=10,window.alignment=c("center"))
+
+
+QL.SRP.DEV.10=Quantile.loess(Y=Y.SRP,X=X.dev,the.quant=0.1,window.size=10,window.alignment=c("center"))
+QL.SRP.DEV.25=Quantile.loess(Y=Y.SRP,X=X.dev,the.quant=0.25,window.size=10,window.alignment=c("center"))
+QL.SRP.DEV.50=Quantile.loess(Y=Y.SRP,X=X.dev,the.quant=0.50,window.size=10,window.alignment=c("center"))
+QL.SRP.DEV.75=Quantile.loess(Y=Y.SRP,X=X.dev,the.quant=0.75,window.size=10,window.alignment=c("center"))
+QL.SRP.DEV.90=Quantile.loess(Y=Y.SRP,X=X.dev,the.quant=0.90,window.size=10,window.alignment=c("center"))
+
+QL.TP.DEV.10=Quantile.loess(Y=Y.TP,X=X.dev,the.quant=0.1,window.size=10,window.alignment=c("center"))
+QL.TP.DEV.25=Quantile.loess(Y=Y.TP,X=X.dev,the.quant=0.25,window.size=10,window.alignment=c("center"))
+QL.TP.DEV.50=Quantile.loess(Y=Y.TP,X=X.dev,the.quant=0.50,window.size=10,window.alignment=c("center"))
+QL.TP.DEV.75=Quantile.loess(Y=Y.TP,X=X.dev,the.quant=0.75,window.size=10,window.alignment=c("center"))
+QL.TP.DEV.90=Quantile.loess(Y=Y.TP,X=X.dev,the.quant=0.90,window.size=10,window.alignment=c("center"))
+
+QL.PP.DEV.10=Quantile.loess(Y=Y.PP,X=X.dev,the.quant=0.1,window.size=10,window.alignment=c("center"))
+QL.PP.DEV.25=Quantile.loess(Y=Y.PP,X=X.dev,the.quant=0.25,window.size=10,window.alignment=c("center"))
+QL.PP.DEV.50=Quantile.loess(Y=Y.PP,X=X.dev,the.quant=0.50,window.size=10,window.alignment=c("center"))
+QL.PP.DEV.75=Quantile.loess(Y=Y.PP,X=X.dev,the.quant=0.75,window.size=10,window.alignment=c("center"))
+QL.PP.DEV.90=Quantile.loess(Y=Y.PP,X=X.dev,the.quant=0.90,window.size=10,window.alignment=c("center"))
+
+log10(dat$DIN)
+plot(log10(dat$DIN))
+
+```
+
+# Figure 3: quantile loess plots
+```{r}
+# Figure 3 #
+############
+par(mfrow=c(2,3))
+par(mar=c(4.4,5.5,2,2))
+plot(log10(DIN)~pDEV,data=dat,cex=0.1,cex.lab=2,cex.axis=2,yaxt="n",ylab="DIN (mg/L)",xlab="% agriculture + urban",col=alpha("gray",1),xlim=c(0,100),ylim=c(-3,1.5))
+#axis(side=2,at=c(-3,-2,-1,0,1),labels=c(expression(10^-3),expression(10^-2),expression(10^-1),expression(10^0),expression(10^1)),cex.axis=1.5)
+axis(side=2,at=c(-3,-2,-1,0,1),labels=c(0.001,0.01,0.1,1,10),cex.axis=2)
+points(QL.DIN.DEV.10$y.loess~QL.DIN.DEV.10$x,type="l")
+points(QL.DIN.DEV.25$y.loess~QL.DIN.DEV.25$x,type="l")
+points(QL.DIN.DEV.50$y.loess~QL.DIN.DEV.25$x,type="l")
+points(QL.DIN.DEV.75$y.loess~QL.DIN.DEV.25$x,type="l")
+points(QL.DIN.DEV.90$y.loess~QL.DIN.DEV.90$x,type="l")
+text(100,0.25,"10%",cex=0.75)
+text(100,0.50,"25%",cex=0.75)
+text(100,0.75,"50%",cex=0.75)
+text(100,1,"75%",cex=0.75)
+text(100,1.25,"90%",cex=0.75)
+mtext("a",at=0)
+
+plot(log10(TN_mc)~pDEV,data=dat,col="gray",cex=0.1,cex.lab=2,cex.axis=2,yaxt="n",ylab="TN (mg/L)",xlab="% agriculture + urban",xlim=c(0,100),ylim=c(-3.5,1.5))
+axis(side=2,at=c(-3,-2,-1,0,1),labels=c(0.001,0.01,0.1,1,10),cex.axis=2)
+#axis(side=2,at=c(-3,-2,-1,0,1),labels=c(expression(10^-3),expression(10^-2),expression(10^-1),expression(10^0),expression(10^1)),cex.axis=1.5)
+points(QL.TN.DEV.10$y.loess~QL.TN.DEV.10$x,type="l")
+points(QL.TN.DEV.25$y.loess~QL.TN.DEV.25$x,type="l")
+points(QL.TN.DEV.50$y.loess~QL.TN.DEV.25$x,type="l")
+points(QL.TN.DEV.75$y.loess~QL.TN.DEV.25$x,type="l")
+points(QL.TN.DEV.90$y.loess~QL.TN.DEV.90$x,type="l")
+#text(1,0.5,"10%",cex=0.75) 
+#text(1,0.57,"25%",cex=0.75)
+#text(1,0.67,"50%",cex=0.75)
+#text(1,0.77,"75%",cex=0.75)
+#text(1,0.87,"90%",cex=0.75)
+mtext("b",at=0)
+
+
+plot(log10(samp_PNcorr)~pDEV,data=dat,col="gray",cex=0.1,cex.lab=2,cex.axis=2,yaxt="n",ylab="PN (mg/L)",xlab="% agriculture + urban",ylim=c(-3.5,1.5),xlim=c(0,100))
+axis(side=2,at=c(-3,-2,-1,0,1),labels=c(0.001,0.01,0.1,1,10),cex.axis=2)
+#axis(side=2,at=c(-3,-2,-1,0,1),labels=c(expression(10^-3),expression(10^-2),expression(10^-1),expression(10^0),expression(10^1)),cex.axis=1.5)
+points(QL.PN.DEV.10$y.loess~QL.PN.DEV.10$x,type="l")
+points(QL.PN.DEV.25$y.loess~QL.PN.DEV.25$x,type="l")
+points(QL.PN.DEV.50$y.loess~QL.PN.DEV.25$x,type="l")
+points(QL.PN.DEV.75$y.loess~QL.PN.DEV.25$x,type="l")
+points(QL.PN.DEV.90$y.loess~QL.PN.DEV.90$x,type="l")
+#text(1,-1.5,"10%",cex=0.75) 
+#text(1,-1.35,"25%",cex=0.75)
+#text(1,-1.2,"50%",cex=0.75)
+#text(1,-1,"75%",cex=0.75)
+#text(1,-0.8,"90%",cex=0.75)
+mtext("c",at=0)
+
+
+plot(log10(DIP_mc)~pDEV,data=dat,col="gray",cex=0.1,cex.lab=2,cex.axis=2,yaxt="n",ylab="DIP (mg/L)",xlab="% agriculture + urban",xlim=c(0,100),ylim=c(-3.5,1.5))
+axis(side=2,at=c(-3,-2,-1,0,1),labels=c(0.001,0.01,0.1,1,10),cex.axis=2)
+#axis(side=2,at=c(-3,-2,-1,0,1),labels=c(expression(10^-3),expression(10^-2),expression(10^-1),expression(10^0),expression(10^1)),cex.axis=1.5)
+points(QL.SRP.DEV.10$y.loess~QL.SRP.DEV.10$x,type="l")
+points(QL.SRP.DEV.25$y.loess~QL.SRP.DEV.25$x,type="l")
+points(QL.SRP.DEV.50$y.loess~QL.SRP.DEV.25$x,type="l")
+points(QL.SRP.DEV.75$y.loess~QL.SRP.DEV.25$x,type="l")
+points(QL.SRP.DEV.90$y.loess~QL.SRP.DEV.90$x,type="l")
+#text(1,-1.2,"10%",cex=0.75)
+#text(1,-1.05,"25%",cex=0.75)
+#text(1,-0.85,"50%",cex=0.75)
+#text(1,-0.65,"75%",cex=0.75)
+#text(1,-0.5,"90%",cex=0.75)
+mtext("d",at=0)
+
+
+plot(log10(TP_mc)~pDEV,data=dat,col="gray",cex=0.1,cex.lab=2,cex.axis=2,yaxt="n",ylab="TP (mg/L)",xlab="% agriculture + urban",xlim=c(0,100),ylim=c(-3.5,1.5))
+axis(side=2,at=c(-3,-2,-1,0,1),labels=c(0.001,0.01,0.1,1,10),cex.axis=2)
+#axis(side=2,at=c(-3,-2,-1,0,1),labels=c(expression(10^-3),expression(10^-2),expression(10^-1),expression(10^0),expression(10^1)),cex.axis=1.5)
+points(QL.TP.DEV.10$y.loess~QL.TP.DEV.10$x,type="l")
+points(QL.TP.DEV.25$y.loess~QL.TP.DEV.25$x,type="l")
+points(QL.TP.DEV.50$y.loess~QL.TP.DEV.25$x,type="l")
+points(QL.TP.DEV.75$y.loess~QL.TP.DEV.25$x,type="l")
+points(QL.TP.DEV.90$y.loess~QL.TP.DEV.90$x,type="l")
+#text(1,-0.8,"10%",cex=0.75)
+#text(1,-0.65,"25%",cex=0.75)
+#text(1,-0.5,"50%",cex=0.75)
+#text(1,-0.35,"75%",cex=0.75)
+#text(1,-0.15,"90%",cex=0.75)
+mtext("e",at=0)
+
+
+plot(log10(samp_PPcorr)~pDEV,data=dat,col="gray",cex=0.1,cex.lab=2,cex.axis=2,yaxt="n",ylab="PP (mg/L)",xlab="% agriculture + urban",xlim=c(0,100),ylim=c(-3.5,1.5))
+axis(side=2,at=c(-3,-2,-1,0,1),labels=c(0.001,0.01,0.1,1,10),cex.axis=2)
+#axis(side=2,at=c(-3,-2,-1,0,1),labels=c(expression(10^-3),expression(10^-2),expression(10^-1),expression(10^0),expression(10^1)),cex.axis=1.5)
+points(QL.PP.DEV.10$y.loess~QL.PP.DEV.10$x,type="l")
+points(QL.PP.DEV.25$y.loess~QL.PP.DEV.25$x,type="l")
+points(QL.PP.DEV.50$y.loess~QL.PP.DEV.25$x,type="l")
+points(QL.PP.DEV.75$y.loess~QL.PP.DEV.25$x,type="l")
+points(QL.PP.DEV.90$y.loess~QL.PP.DEV.90$x,type="l")
+#text(1,-1.4,"10%",cex=0.75)
+#text(1,-1.25,"25%",cex=0.75)
+#text(1,-1.15,"50%",cex=0.75)
+#text(1,-1,"75%",cex=0.75)
+#text(1,-0.85,"90%",cex=0.75)
+mtext("f",at=0)
+
+
+
+```
+
+# testing the relationship between land use vs. % N or %P in particles or dissolved
+```{r}
+library(r2glmm)
+percentPN=dat$samp_PNcorr/dat$TN_mc*100
+percentPP=dat$samp_PPcorr/dat$TP_mc*100
+
+percentDIN=dat$DIN/dat$TN_mc*100
+percentDIP=dat$DIP/dat$TP_mc*100
+
+par(mfrow=c(2,2))
+plot(percentPN~dat$PctCrop2006Ws,ylim=c(0,100),cex=0.1,xlab="% crop",ylab="% PN")
+plot(percentPP~dat$PctCrop2006Ws,ylim=c(0,100),cex=0.1,xlab="% crop",ylab="% PP")
+plot(percentDIN~dat$PctCrop2006Ws,ylim=c(0,100),cex=0.1,xlab="% crop",ylab="% DIN")
+plot(percentDIP~dat$PctCrop2006Ws,ylim=c(0,100),cex=0.1,xlab="% crop",ylab="% DIP")
+
+station.fac1=as.factor(dat$stationId)
+
+modPN1=lmer(percentPN~dat$PctCrop2006Ws+(1|station.fac1),data=dat)
+r.squaredGLMM(modPP1)
+modPP1=lmer(percentPP~dat$PctCrop2006Ws+(1|station.fac1),data=dat)
+summary(lmer(percentDIN~dat$PctCrop2006Ws+(1|station.fac1)),data=dat)
+summary(lmer(percentDIP~dat$PctCrop2006Ws+(1|station.fac1)),data=dat)
+
+
+percent_urb=dat$PctUrbHi2006Ws+dat$PctUrbLo2006Ws+dat$PctUrbMd2006Ws
+par(mfrow=c(2,2))
+plot(percentPN~percent_urb,ylim=c(0,100),cex=0.1,xlab="% urb",ylab="% PN")
+plot(percentPP~dat$Pct2006Ws,ylim=c(0,100),cex=0.1,xlab="% crop",ylab="% PN")
+plot(percentDIN~dat$PctCrop2006Ws,ylim=c(0,100),cex=0.1,xlab="% crop",ylab="% PN")
+plot(percentDIP~dat$PctCrop2006Ws,ylim=c(0,100),cex=0.1,xlab="% crop",ylab="% PN")
+
+summary(lmer(percentPN~percent_urb+(1|station.fac1)),data=dat)
+summary(lmer(percentPP~percent_urb+(1|station.fac1)),data=dat)
+summary(lmer(percentDIN~percent_urb+(1|station.fac1)),data=dat)
+summary(lmer(percentDIP~percent_urb+(1|station.fac1)),data=dat)
+
+```
+
+
+# Figure 4: plots of N vs. P color coded by land use
+```{r}
+#install.packages('scales') (if not already installed)
+library(scales)
+
+pAG=dat$PctCrop2006Ws+dat$PctHay2006Ws
+pURB=dat$PctUrbLo2006Ws+dat$PctUrbMd2006Ws+dat$PctUrbHi2006Ws
+pFOR=dat$PctConif2006Ws+dat$PctDecid2006Ws+dat$PctMxFst2006Ws
+
+colorfunc=colorRampPalette(c("yellow","red"))
+colorfunc(100)
+
+agCol=colorfunc(100)[as.numeric(cut(pAG,breaks=100))]
+urbCol=colorfunc(100)[as.numeric(cut(pURB,breaks=100))]
+forCol=colorfunc(100)[as.numeric(cut(pFOR,breaks=100))]
+
+agCol1=colorRampPaletteAlpha(agCol,100)
+a=seq(0,1,0.001)
+agCol
+
+par(mfrow=c(3,3))
+par(mar=c(3,0,1.25,0),oma=c(4,4.5,0.5,0.5))
+### dissolved N, P ###
+plot(log10(DIN)~log10(DIP_mc),data=dat,xlab="",col=alpha(agCol,0.5),cex=0.25,cex.lab=1,cex.axis=1,xaxt="n",yaxt="n",ylim=c(-2,1.5),xlim=c(-4,1))
+mtext("low to high % agriculture",side=3,at=-1,line=0.45,cex=0.75)
+mtext("DIN (mg/L)",at=0,line=2.5,side=2,cex=0.75)
+abline(a=log10(7.2),b=log10(7.2),lty=1)
+axis(side=2,at=c(-1,0,1),labels=c(expression(0.1,1,10)))
+axis(side=1,at=c(-3,-1,0,1),labels=c(expression(0.001,0.1,1,10)))
+
+mtext("a",at=-3,cex=0.75,line=0.2,side=3)
+legend_image <- as.raster(matrix(rev(colorfunc(100)), ncol=1))
+text(x=0.7, y = seq(-2,-1,l=5), labels = c("0%","25%","50%","75%","100%"),cex=1)
+rasterImage(legend_image, 2, -2, 1,-1)
+
+plot(log10(DIN)~log10(DIP_mc),data=dat,xlab="",col=alpha(urbCol,0.5),cex=0.25,cex.lab=1,cex.axis=1,xaxt="n",yaxt="n",ylim=c(-2,1.5),xlim=c(-4,1),xaxt="n",yaxt="n")
+abline(a=log10(7.2),b=log10(7.2),lty=1)
+mtext("low to high % urban",side=3,at=-1,line=0.45,cex=0.75)
+mtext("DIP (mg/L)",at=-1,line=2.5,side=1,cex=0.75)
+#axis(side=2,at=c(-1,0,1),labels=c(expression(0.1,1,10)))
+axis(side=1,at=c(-3,-1,0,1),labels=c(expression(0.001,0.1,1,10)))
+
+#mtext("B",at=0.9,cex=0.75,line=-1.2,side=1)
+mtext("b",at=-3,cex=0.75,line=0.2,side=3)
+
+plot(log10(DIN)~log10(DIP_mc),data=dat,xlab="",col=alpha(forCol,0.5),cex=0.25,cex.lab=1,cex.axis=1,xaxt="n",yaxt="n",ylim=c(-2,1.5),xlim=c(-4,1))
+abline(a=log10(7.2),b=log10(7.2),lty=1)
+mtext("low to high % forest",side=3,at=-1,line=0.45,cex=0.75)
+#axis(side=2,at=c(-1,0,1),labels=c(expression(0.1,1,10)))
+axis(side=1,at=c(-3,-1,0,1),labels=c(expression(0.001,0.1,1,10)))
+
+mtext("c",at=-3,cex=0.75,line=0.2,side=3)
+
+
+### Total N, P ###
+plot(log10(dat$TN_mc)~log10(dat$TP_mc),data=dat,xlab="",col=alpha(agCol,0.5),cex=0.25,cex.lab=1,cex.axis=1,xaxt="n",yaxt="n",ylim=c(-2,1.5),xlim=c(-4,1))
+mtext("TN (mg/L)",at=0,line=2.5,side=2,cex=0.75)
+abline(a=log10(7.2),b=log10(7.2),lty=1)
+axis(side=2,at=c(-1,0,1),labels=c(expression(0.1,1,10)))
+axis(side=1,at=c(-3,-1,0,1),labels=c(expression(0.001,0.1,1,10)))
+
+mtext("d",at=-3,cex=0.75,line=0.2,side=3)
+
+plot(log10(dat$TN_mc)~log10(dat$TP_mc),data=dat,xlab="",col=alpha(urbCol,0.5),cex=0.25,cex.lab=1,cex.axis=1,xaxt="n",yaxt="n",ylim=c(-2,1.5),xlim=c(-4,1),xaxt="n",yaxt="n")
+abline(a=log10(7.2),b=log10(7.2),lty=1)
+mtext("TP (mg/L)",at=-1,line=2.5,side=1,cex=0.75)
+#axis(side=2,at=c(-1,0,1),labels=c(expression(0.1,1,10)))
+axis(side=1,at=c(-3,-1,0,1),labels=c(expression(0.001,0.1,1,10)))
+
+mtext("e",at=-3,cex=0.75,line=0.2,side=3)
+
+plot(log10(TN_mc)~log10(TP_mc),xlab="",data=dat,col=alpha(forCol,0.5),cex=0.25,cex.lab=1,cex.axis=1,xaxt="n",yaxt="n",ylim=c(-2,1.5),xlim=c(-4,1))
+abline(a=log10(7.2),b=log10(7.2),lty=1)
+#axis(side=2,at=c(-1,0,1),labels=c(expression(0.1,1,10)))
+axis(side=1,at=c(-3,-1,0,1),labels=c(expression(0.001,0.1,1,10)))
+
+mtext("f",at=-3,cex=0.75,line=0.2,side=3)
+
+### particulate N, P ####
+plot(log10(samp_PNcorr)~log10(samp_PPcorr),data=dat,xlab="",col=alpha(agCol,0.5),cex=0.25,cex.lab=1,cex.axis=1,xaxt="n",yaxt="n",ylim=c(-4,1.5),xlim=c(-4,1))
+mtext("PN (mg/L)",at=-1,line=2.5,side=2,cex=0.75)
+abline(a=log10(7.2),b=log10(7.2),lty=1)
+axis(side=2,at=c(-3,-1,0,1),labels=c(expression(0.001,0.1,1,10)))
+axis(side=1,at=c(-3,-1,0,1),labels=c(expression(0.001,0.1,1,10)))
+mtext("g",at=-4,cex=0.75,line=0.2,side=3)
+
+
+plot(log10(samp_PNcorr)~log10(samp_PPcorr),data=dat,xlab="",col=alpha(urbCol,0.5),cex=0.25,cex.lab=1,cex.axis=1,xaxt="n",yaxt="n",ylim=c(-4,1.5),xlim=c(-4,1),xaxt="n",yaxt="n")
+abline(a=log10(7.2),b=log10(7.2),lty=1)
+mtext("PP (mg/L)",at=-1,line=2.5,side=1,cex=0.75)
+#axis(side=2,at=c(-3,-1,0,1),labels=c(expression(0.001,0.1,1,10)))
+axis(side=1,at=c(-3,-1,0,1),labels=c(expression(0.001,0.1,1,10)))
+mtext("h",at=-4,cex=0.75,line=0.2,side=3)
+
+plot(log10(samp_PNcorr)~log10(samp_PPcorr),data=dat,xlab="",col=alpha(forCol,0.5),cex=0.25,cex.lab=1,cex.axis=1,xaxt="n",yaxt="n",ylim=c(-4,1.5),xlim=c(-4,1))
+abline(a=log10(7.2),b=log10(7.2),lty=1)
+#axis(side=2,at=c(-3,-1,0,1),labels=c(expression(0.001,0.1,1,10)))
+axis(side=1,at=c(-3,-1,0,1),labels=c(expression(0.001,0.1,1,10)))
+mtext("i",at=-4,cex=0.75,line=0.2,side=3)
+
+
+```
+
+# Figure 6: particulate vs. dissolved N:P ratios
+```{r}
+
+par(mfrow=c(1,1))
+par(mar=c(4,5,2,2))
+plot(log10(samp_PNPP)~log10(DIN_DIP),data=dat,ylim=c(-4,5),xlim=c(-4,5),cex=0.25,col=alpha("black",0.5),xaxt="n",yaxt="n",xlab="",ylab="",cex.lab=1.5)
+#points(log10(dat[TP_100,]$samp_PNPP)~log10(dat[TP_100,]$DIN_DIP),col=alpha("orange",0.5),cex=0.1)
+#points(log10(dat[TP_25,]$samp_PNPP)~log10(dat[TP_25,]$DIN_DIP),col=alpha("blue",0.5),cex=0.1)
+axis(side=1,at=c(-3,-1,1,3),labels=c(0.001,0.1,10,1000),cex.axis=1.25)
+axis(side=2,at=c(-3,-1,1,3),labels=c(0.001,0.1,10,1000),cex.axis=1.25)
+abline(a=0,b=1,col=alpha("gray",0.5),lwd=3)
+abline(mod_NP,col=alpha(16,0.5),lty=2,lwd=3)
+mtext("Dissolved N:P",line=2.5,side=1,cex=1.25)
+mtext("Particulate N:P",line=2.5,side=2,cex=1.25)
+#abline(h=log10(2.895),col=alpha("gray",0.5))
+#abline(v=log10(2.895),col=alpha("gray",0.5))
+text(-4,-4,"1:1",cex=1.5)
+#text(log10(2.895),-4,"3:1")
+#text(-4,log10(2.99),"3:1")
+mod_NP <- lm(log10(samp_PNPP)~log10(DIN_DIP),data=dat)
+
+
+
+```
+
+# Analysis of high vs. low TP effects on 1/H values for dissolved vs. particulate N:P ratios (as proxy for sites with low vs. high phytoplankton biomass)
+```{r}
+
+plot(log10(samp_PNPP)~log10(DIN_DIP),data=dat[TP_100,],col=alpha("orange",0.85),ylim=c(-4,5),xlim=c(-4,5),cex=0.1)
+abline(h=log10(16))
+points(log10(samp_PNPP)~log10(DIN_DIP),data=dat[TP_25,],cex=0.1,col=alpha("blue",0.85))
+
+TP_100=which(dat$TP_mc>0.1)
+TP_25=which(dat$TP_mc<0.025)
+mod_NP25=lm(log10(samp_PNPP)~log10(DIN_DIP),data=dat[TP_25,])
+summary(mod_NP25)
+
+mod_NP100=lm(log10(samp_PNPP)~log10(DIN_DIP),data=dat[TP_100,])
+summary(mod_NP100)
+
+#y=x
+#y = 0.0928x + 0.434 
+#x = 0.0928x + 0.434
+1-0.0928
+#0.9072x = 0.434
+0.434/0.9072
+# 0.4784 = x
+10^0.4784
+
+mod_NPx=lm(log10(samp_PNPP)~log10(DIN_DIP):log10(DIP_mc),data=dat)
+summary(mod_NPx)
+```
+
+
+# Discharge-N:P ratio analysis 
+The discharge vs. N:P ratio analysis used to generate Figure 5 in the paper can be found in nawqa_Q_2020_02_26.Rmd
+
+
+# time series analysis - data preparation
+```{r}
+# which sites have >100 records?
+
+site_counts=dat %>% count(placeName)
+#View(site_counts)
+
+# Raritan, San Joaquin, Willamette, Hooch, Neuse, S. Fork Iowa, Potomac, Trinity, Maple, Santa Ana, Platte, Sope, Shingle
+
+# re-format date-time with as.Date
+dat$resultDatetime[1]
+
+dat <- dat %>% mutate(
+nawqa.Date=as.Date(dat$resultDatetime,format="%m/%d/%y")
+)
+range(dat$nawqa.Date)
+
+dat<- dat %>% mutate(
+  DON_DOP=(DON/DOP)*31/14
+)
+
+
+# subset by sites with >100 records
+
+stationId_length=aggregate(dat$TN_mc,by=list(dat$stationId),FUN=length)
+keep_stations=which(stationId_length$x>100)
+keep_stations
+station100d=stationId_length[keep_stations,]
+station100d=station100d[,1]
+
+ts_stations=which(dat$stationId%in%station100d)
+
+
+dat_ts=dat[ts_stations,]
+
+names(dat_ts)
+
+
+
+```
+
+# subset by River with >100 records
+```{r}
+# add column to dat_ts that is numeric dates
+dat_ts <- dat_ts %>% mutate(
+num_Date=as.numeric(dat_ts$nawqa.Date)-min(as.numeric(dat_ts$nawqa.Date))
+)
+
+# get stationId and placeNames, sorted by totalArea
+site_ts=aggregate(dat_ts$totalArea,by=list(as.factor(dat_ts$stationId),dat_ts$placeName),FUN=mean,na.rm=T)
+site_ts <- site_ts[order(site_ts$x),]
+#View(site_ts)
+
+dat_ts$URB <- dat_ts$PctUrbLo2006Ws+dat_ts$PctUrbMd2006Ws+dat_ts$PctUrbHi2006Ws
+dat_ts$AG <- dat_ts$PctCrop2006Ws+dat_ts$PctHay2006Ws
+
+
+Shingle=subset(dat_ts,stationId==5288705)
+sort_Shingle=Shingle[order(Shingle$nawqa.Date),]
+length(sort_Shingle$nawqa.Date)
+summary(Shingle)
+var(sort_Shingle$DIN_DIP)
+var(sort_Shingle$samp_PNPP)
+
+Sope=subset(dat_ts,stationId==2335870)
+sort_Sope=Sope[order(Sope$nawqa.Date),]
+length(sort_Sope$nawqa.Date)
+summary(Sope)
+quantile(sort_Sope$DIN_DIP,c(0.25,0.75))
+quantile(sort_Sope$samp_PNPP,c(0.25,0.75))
+
+
+Iowa=subset(dat_ts,stationId==5451210)
+sort_Iowa=Iowa[order(Iowa$nawqa.Date),]
+length(sort_Iowa$nawqa.Date)
+summary(Iowa)
+
+Maple=subset(dat_ts,stationId==6800000)
+sort_Maple=Maple[order(Maple$nawqa.Date),]
+length(sort_Maple$nawqa.Date)
+summary(Maple)
+
+Raritan=subset(dat_ts,stationId==1403300)
+sort_Raritan=Raritan[order(Raritan$nawqa.Date),]
+length(sort_Raritan$nawqa.Date)
+summary(Raritan)
+
+SantaAna=subset(dat_ts,stationId==11074000)
+sort_SantaAna=SantaAna[order(SantaAna$nawqa.Date),]
+length(sort_SantaAna$nawqa.Date)
+summary(SantaAna)
+
+Hooch=subset(dat_ts,stationId==2338000)
+sort_Hooch=Hooch[order(Hooch$nawqa.Date),]
+length(sort_Hooch$nawqa.Date)
+summary(Hooch)
+
+Neuse=subset(dat_ts,stationId==2089500)
+sort_Neuse=Neuse[order(Neuse$nawqa.Date),]
+length(sort_Neuse$nawqa.Date)
+summary(Neuse)
+
+Trinity=subset(dat_ts,stationId==8057410)
+sort_Trinity=Trinity[order(Trinity$nawqa.Date),]
+length(sort_Trinity$nawqa.Date)
+summary(Trinity)
+
+Willa=subset(dat_ts,stationId==14211720)
+sort_Willa=Willa[order(Willa$nawqa.Date),]
+length(sort_Willa$nawqa.Date)
+summary(Willa)
+
+Potomac=subset(dat_ts,stationId==1646580)
+sort_Potomac=Potomac[order(Potomac$nawqa.Date),]
+length(sort_Potomac$nawqa.Date)
+summary(Potomac)
+
+Sanjo=subset(dat_ts,stationId==11303500)
+sort_Sanjo=Sanjo[order(Sanjo$nawqa.Date),]
+length(sort_Sanjo$nawqa.Date)
+summary(Sanjo)
+
+Platte=subset(dat_ts,stationId==6805500)
+sort_Platte=Platte[order(Platte$nawqa.Date),]
+length(sort_Platte$nawqa.Date)
+summary(Platte)
+
+
+```
+
+# create vector of all possible dates for x-axis of Fig. 7
+```{r}
+#
+min(dat_ts$nawqa.Date)
+max(dat_ts$nawqa.Date)
+date_seq=seq(0,3548,1)
+cal_date=seq(min(dat_ts$nawqa.Date),max(dat_ts$nawqa.Date),1)
+# pull out Jan 1s
+
+cal_date[2651+365]
+Jan_1s=c(94,460,825,1190,1555,1921,2286,2651,3016)
+
+
+
+```
+
+# autocorrelation analysis to assess seasonal fluctuations
+```{r}
+#install.packages("lubridate")
+library(lubridate)
+
+dat_ts
+quart_dat=quarter(dat_ts$nawqa.Date,with_year=FALSE)
+
+Sope_quart=quarter(sort_Sope$nawqa.Date,with_year=TRUE)
+Sope_month=month(sort_Sope$nawqa.Date,abbr=TRUE,label=TRUE)
+aggregate(cbind(sort_Sope$DIN_DIP,sort_Sope$PN_PP),by=list(Sope_quart),FUN=mean,na.rm=T)
+
+Shingle_month=month(sort_Shingle$nawqa.Date,abbr=TRUE,label=TRUE)
+aggregate(cbind(sort_Shingle$DIN_DIP,sort_Shingle$PN_PP),by=list(Shingle_month),FUN=mean,na.rm=T)
+
+Iowa_month=month(sort_Iowa$nawqa.Date,abbr=TRUE,label=TRUE)
+aggregate(cbind(sort_Iowa$DIN_DIP,sort_Iowa$PN_PP),by=list(Iowa_month),FUN=mean,na.rm=T)
+
+Maple_month=month(sort_Maple$nawqa.Date,abbr=TRUE,label=TRUE)
+aggregate(cbind(sort_Maple$DIN_DIP,sort_Maple$PN_PP),by=list(Maple_month),FUN=mean,na.rm=T)
+
+Raritan_month=month(sort_Raritan$nawqa.Date,abbr=TRUE,label=TRUE)
+aggregate(cbind(sort_Raritan$DIN_DIP[-67],sort_Raritan$PN_PP[-67]),by=list(Raritan_month[-67]),FUN=mean,na.rm=T)
+mean(c(41,59,66))
+mean(c(19,17,17))
+which.max(sort_Raritan$PN_PP)
+
+SantaAna_month=month(sort_SantaAna$nawqa.Date,abbr=TRUE,label=TRUE)
+aggregate(cbind(sort_SantaAna$DIN_DIP,sort_SantaAna$PN_PP),by=list(SantaAna_month),FUN=mean,na.rm=T))
+
+Hooch_month=month(sort_Hooch$nawqa.Date,abbr=TRUE,label=TRUE)
+aggregate(cbind(sort_Hooch$DIN_DIP,sort_Hooch$PN_PP),by=list(Hooch_month),FUN=mean,na.rm=T)
+
+par(mfrow=c(1,1))
+sope_acf=acf(sort_Sope$DIN_DIP,main="",plot=FALSE,level=0.95)
+
+par(mfrow=c(4,4))
+par(mar=c(4,5,1,1))
+par(mar=c(0,0,2,0),oma=c(4,6,0.5,0.5))
+plot(sope_acf,xaxt="n",ylim=c(-0.4,1),main="")
+mtext("a",side=3,at=0)
+mtext("Sope",side=3,line=-1.55,cex=1,at=10)
+acf(sort_Shingle$DIN_DIP,main="",xaxt="n",yaxt="n",ylim=c(-0.4,1))
+mtext("b",side=3,at=0)
+mtext("Shingle",side=3,line=-1.55,cex=1,at=10)
+acf(sort_Iowa$DIN_DIP,main="",xaxt="n",yaxt="n",ylim=c(-0.4,1))
+mtext("c",side=3,at=0)
+mtext("S. Fork Iowa",side=3,line=-1.55,cex=1,at=10)
+acf(sort_Maple$DIN_DIP,main="",xaxt="n",yaxt="n",ylim=c(-0.4,1))
+mtext("d",side=3,at=0)
+mtext("Maple",side=3,line=-1.55,cex=1,at=10)
+acf(sort_Raritan$DIN_DIP,main="",xaxt="n",ylim=c(-0.4,1))
+mtext("e",side=3,at=0)
+mtext("Raritan",side=3,line=-1.55,cex=1,at=10)
+acf(sort_SantaAna$DIN_DIP,main="",xaxt="n",yaxt="n",ylim=c(-0.4,1))
+mtext("f",side=3,at=0)
+mtext("Santa Ana",side=3,line=-1.55,cex=1,at=10)
+acf(sort_Hooch$DIN_DIP,main="",xaxt="n",yaxt="n",ylim=c(-0.4,1))
+mtext("g",side=3,at=0)
+mtext("Chattahoochee",side=3,line=-1.55,cex=1,at=10)
+acf(sort_Neuse$DIN_DIP,main="",xaxt="n",yaxt="n",ylim=c(-0.4,1))
+mtext("h",side=3,at=0)
+mtext("Neuse",side=3,line=-1.55,cex=1,at=10)
+acf(sort_Trinity$DIN_DIP,main="",xaxt="n",ylim=c(-0.4,1))
+mtext("i",side=3,at=0)
+mtext("Trinity",side=3,line=-1.55,cex=1,at=10)
+acf(sort_Willa$DIN_DIP,main="",yaxt="n",ylim=c(-0.4,1))
+mtext("j",side=3,at=0)
+mtext("Willamette",side=3,line=-1.55,cex=1,at=10)
+acf(sort_Potomac$DIN_DIP,main="",yaxt="n",ylim=c(-0.4,1))
+mtext("k",side=3,at=0)
+mtext("Potomac",side=3,line=-1.55,cex=1,at=10)
+mtext("Lag",side=1,line=3,cex=1,at=0)
+acf(sort_Sanjo$DIN_DIP,main="",yaxt="n",ylim=c(-0.4,1))
+mtext("l",side=3,at=0)
+mtext("San Joaquin",side=3,line=-1.55,cex=1,at=10)
+acf(sort_Platte$DIN_DIP,main="",ylim=c(-0.4,1))
+mtext("m",side=3,at=0)
+mtext("Platte",side=3,line=-1.55,cex=1,at=10)
+mtext("ACF",side=2,line=2,at=3.5)
+
+
+# PN_PP ACF functions
+par(mfrow=c(4,4))
+par(mar=c(4,5,1,1))
+par(mar=c(0,0,2,0),oma=c(4,6,0.5,0.5))
+plot(sope_acf,xaxt="n",ylim=c(-0.25,1),main="")
+mtext("a",side=3,at=0)
+mtext("Sope",side=3,line=-1.55,cex=1,at=10)
+acf(sort_Shingle$samp_PNPP,main="",xaxt="n",yaxt="n",ylim=c(-0.25,1))
+mtext("b",side=3,at=0)
+mtext("Shingle",side=3,line=-1.55,cex=1,at=10)
+acf(sort_Iowa$samp_PNPP,main="",xaxt="n",yaxt="n",ylim=c(-0.25,1))
+mtext("c",side=3,at=0)
+mtext("S. Fork Iowa",side=3,line=-1.55,cex=1,at=10)
+acf(sort_Maple$samp_PNPP,main="",xaxt="n",yaxt="n",ylim=c(-0.25,1))
+mtext("d",side=3,at=0)
+mtext("Maple",side=3,line=-1.55,cex=1,at=10)
+acf(sort_Raritan$samp_PNPP,main="",xaxt="n",ylim=c(-0.25,1))
+mtext("e",side=3,at=0)
+mtext("Raritan",side=3,line=-1.55,cex=1,at=10)
+acf(sort_SantaAna$samp_PNPP,main="",xaxt="n",yaxt="n",ylim=c(-0.25,1))
+mtext("f",side=3,at=0)
+mtext("Santa Ana",side=3,line=-1.55,cex=1,at=10)
+acf(sort_Hooch$samp_PNPP,main="",xaxt="n",yaxt="n",ylim=c(-0.25,1))
+mtext("g",side=3,at=0)
+mtext("Chattahoochee",side=3,line=-1.55,cex=1,at=10)
+acf(sort_Neuse$samp_PNPP,main="",xaxt="n",yaxt="n",ylim=c(-0.25,1))
+mtext("h",side=3,at=0)
+mtext("Neuse",side=3,line=-1.55,cex=1,at=10)
+acf(sort_Trinity$samp_PNPP,main="",xaxt="n",ylim=c(-0.25,1))
+mtext("i",side=3,at=0)
+mtext("Trinity",side=3,line=-1.55,cex=1,at=10)
+acf(sort_Willa$samp_PNPP,main="",yaxt="n",ylim=c(-0.25,1))
+mtext("j",side=3,at=0)
+mtext("Willamette",side=3,line=-1.55,cex=1,at=10)
+acf(sort_Potomac$samp_PNPP,main="",yaxt="n",ylim=c(-0.25,1))
+mtext("k",side=3,at=0)
+mtext("Potomac",side=3,line=-1.55,cex=1,at=10)
+mtext("Lag",side=1,line=3,cex=1,at=0)
+acf(sort_Sanjo$samp_PNPP,main="",yaxt="n",ylim=c(-0.25,1))
+mtext("l",side=3,at=0)
+mtext("San Joaquin",side=3,line=-1.55,cex=1,at=10)
+acf(sort_Platte$samp_PNPP,main="",ylim=c(-0.25,1))
+mtext("m",side=3,at=0)
+mtext("Platte",side=3,line=-1.55,cex=1,at=10)
+mtext("ACF",side=2,line=2,at=3.5)
+
+
+acf(sort_Sope$PN_PP,main="")
+acf(sort_Shingle$PN_PP,main="")
+acf(sort_Iowa$PN_PP,main="")
+acf(sort_Maple$PN_PP,main="")
+acf(sort_Raritan$PN_PP,main="")
+acf(sort_SantaAna$PN_PP,main="")
+acf(sort_Hooch$PN_PP,main="")
+acf(sort_Neuse$PN_PP,main="")
+acf(sort_Trinity$PN_PP,main="")
+acf(sort_Willa$PN_PP,main="")
+acf(sort_Potomac$PN_PP,main="")
+acf(sort_Sanjo$PN_PP,main="")
+acf(sort_Platte$PN_PP,main="")
+
+```
+
+
+# figure 7: plots of particulate and dissolved N:P thru time
+```{r}
+
+min(date_num_Sope)
+
+# In order of watershed area (smallest to largest)
+# Sope Creek 
+par(mfrow=c(4,4))
+par(mar=c(0,0,2,0),oma=c(4,6,0.5,0.5))
+plot(log10(DIN_DIP)~num_Date,data=sort_Sope,type="p",col="black",pch=16,main="",xlab="Date",ylab="N:P ratio",xaxt="n",cex=0.75,yaxt="n",lty=1,ylim=c(-2,4.5))
+#points(log10(DON_DOP)~num_Date,data=sort_Sope,type="p",col="orange",pch=1,cex=0.75,lty=2)
+points(log10(samp_PNPP)~num_Date,data=sort_Sope,type="p",col="gray",pch=1,cex=0.75,lty=1)
+abline(h=log10(16),col=alpha("gray",0.5),lwd=3,lty=1)
+mtext("a",side=3,line=0.1,cex=1.5,adj=0.99)
+mtext("Sope (1, 37)",side=1,line=-1.55,cex=1,at=2750)
+#mtext("N:P ratio",side=2,at=0.1,line=2.5,cex=1.5)
+axis(side=2,cex.axis=1,at=c(-2,-1,0,1,2,3),labels=c(0.01,0.1,1,10,100,1000),cex.axis=1.25)
+legend("bottomleft",c("Particulate","Dissolved"),col=c(16,1),pch=c(1,16),lty=c(1,1),bty="n",cex=0.8)
+summary(fit.1)
+#abline(fit.1)
+#abline(fit.2,col=alpha(16,0.5))
+
+
+
+# Shingle Creek MN #
+plot(log10(DIN_DIP)~num_Date,data=sort_Shingle,type="p",col="black",pch=16,main="",ylim=c(-2,4.5),ylab="Dissolved N:P",xlab="Particulate N:P",xaxt="n",yaxt="n",cex=0.75,lty=1)
+points(log10(samp_PNPP)~num_Date,data=sort_Shingle,type="p",col="gray",pch=1,cex=0.75,lty=1)
+abline(h=log10(16),col=alpha(16,0.5),lwd=3)
+mtext("Shingle (1, 69)",side=1,line=-1.55,cex=1,at=2750)
+mtext("b",side=3,line=0.1,cex=1.5,adj=0.99)
+#summary(fit.3)
+#abline(fit.3)
+#abline(fit.4,col=alpha(16,0.5))
+
+# S. Fork Iowa River
+plot(DIN_DIP~num_Date,data=sort_Iowa,type="p",col="black",pch=16,main="",log="y",ylim=c(0.01,20000),xlab="",ylab="",yaxt="n",xaxt="n",cex=0.75,lty=1)
+points(samp_PNPP~num_Date,data=sort_Iowa,type="p",col="gray",pch=1,cex=0.75)
+abline(h=16,col=alpha(16,0.5),lwd=3)
+mtext("S. Fork Iowa (88, 1)",side=1,line=-1.55,cex=1,at=2750)
+mtext("c",side=3,line=0.1,cex=1.5,adj=0.99)
+#abline(fit.5)
+#abline(fit.6,col=alpha(16,0.5))
+
+# Maple Creek
+plot(DIN_DIP~num_Date,data=sort_Maple,type="p",col="black",pch=16,main="",ylim=c(0.01,20000),log="y",yaxt="n",cex.axis=2,cex=0.75,xaxt="n")
+points(samp_PNPP~num_Date,data=sort_Maple,type="p",col="gray",pch=1,cex=0.75)
+abline(h=16,col=alpha(16,0.5),lwd=3)
+#axis(side=2,cex.axis=2)
+#axis(side=1,cex.axis=2)
+mtext("Maple (82, 1)",side=1,line=-1.55,cex=1,at=2750)
+mtext("d",side=3,line=0.1,cex=1.5,adj=0.99)
+#abline(fit.7)
+#abline(fit.8,col=alpha(16,0.5))
+
+# Raritan River
+plot(DIN_DIP~num_Date,data=sort_Raritan,type="p",col="black",pch=16,ylim=c(0.01,20000),main="",ylab="",xlab="",cex=0.75,cex.lab=2,cex.axis=2,yaxt="n",log="y",cex.axis=2,xaxt="n")
+points(samp_PNPP~num_Date,data=sort_Raritan,type="p",col="gray",pch=1,cex=0.75)
+abline(h=16,col=alpha(16,0.5),lwd=3)
+mtext("Raritan (25, 12)",side=1,line=-1.55,cex=1,at=2750)
+mtext("e",side=3,line=0.1,cex=1.5,adj=0.99)
+axis(side=2,cex.axis=1,at=c(0.01,0.1,1,10,100,1000),labels=c(0.01,0.1,1,10,100,1000),cex.axis=2)
+#abline(fit.9)
+#abline(fit.10,col=alpha(16,0.5))
+
+# Santa Ana River
+plot(DIN_DIP~num_Date,data=sort_SantaAna,type="p",col="black",pch=16,main="",ylim=c(0.01,20000),log="y",yaxt="n",cex.axis=2,cex=0.75,xaxt="n")
+points(samp_PNPP~num_Date,data=sort_SantaAna,type="p",col="gray",pch=1,cex=0.75)
+abline(h=16,col=alpha(16,0.5),lwd=3)
+mtext("Santa Ana (5, 22)",side=1,line=-1.55,cex=1,at=2750)
+mtext("f",side=3,line=0.1,cex=1.5,adj=0.99)
+#abline(fit.11)
+#abline(fit.12,col=alpha(16,0.5))
+
+#par(mfrow=c(2,4))
+#par(mar=c(0,0,0,0),oma=c(4,4,0.5,0.5))
+# Chattahoochee
+plot(DIN_DIP~num_Date,data=sort_Hooch,type="p",col="black",pch=16,main="",ylab="",xlab="",yaxt="n",ylim=c(0.01,20000),xaxt="n",log="y",cex=0.75)
+points(samp_PNPP~num_Date,data=sort_Hooch,type="p",col="gray",pch=1,cex=0.75)
+
+abline(h=16,col=alpha(16,0.5),lwd=3)
+#axis(side=2,cex.axis=2,at=c(0.01,0.1,1,10,100,1000),labels=c("","0.1","1","10","100","1000"))
+mtext("Chattahoochee (10, 16)",side=1,line=-1.55,cex=1,at=2400)
+#mtext("N:P ratio",side=2,at=0.01,line=2.5,cex=1.5)
+mtext("g",side=3,line=0.1,cex=1.5,adj=0.99)
+#abline(fit.13)
+#abline(fit.14,col=alpha(16,0.5))
+
+# Neuse river
+plot(DIN_DIP~num_Date,data=sort_Neuse,type="p",col="black",pch=16,main="",ylim=c(0.01,20000),xlab="Date",ylab="N:P ratio",log="y",xaxt="n",yaxt="n",cex=0.75)
+points(samp_PNPP~num_Date,data=sort_Neuse,type="p",col="gray",pch=1,cex=0.75)
+abline(h=16,col=alpha(16,0.5),lwd=3)
+mtext("Neuse (28, 7)",side=1,line=-1.55,cex=1,at=2750)
+mtext("h",side=3,line=0.1,cex=1.5,adj=0.99)
+#abline(fit.15)
+#abline(fit.16,col=alpha(16,0.5))
+
+# Trinity River
+plot(DIN_DIP~num_Date,data=sort_Trinity,type="p",col="black",pch=16,main="",ylim=c(0.01,20000),log="y",xaxt="n",yaxt="n",cex=0.75,cex.axis=2)
+points(samp_PNPP~num_Date,data=sort_Trinity,type="p",col="gray",pch=1,cex=0.75)
+abline(h=16,col=alpha(16,0.5),lwd=3)
+mtext("Trinity (14, 14)",side=1,line=-1.55,cex=1,at=2750)
+mtext("i",side=3,line=0.1,cex=1.5,adj=0.99)
+axis(side=2,cex.axis=1,at=c(0.01,0.1,1,10,100,1000),labels=c(0.01,0.1,1,10,100,1000),cex.axis=2)
+mtext("N:P ratio",at=222000,line=2.5,side=2,cex=1.5)
+#abline(fit.17)
+#abline(fit.18,col=alpha(16,0.5))
+
+#Willamette River
+plot(DIN_DIP~num_Date,data=sort_Willa,type="p",col="black",pch=16,ylim=c(0.01,20000),main="",xlab="",ylab="",cex.lab=2,cex.axis=1,log="y",yaxt="n",cex=0.75,las=2,cex.axis=2,xaxt="n")
+points(samp_PNPP~num_Date,data=sort_Willa,type="p",col="gray",pch=1,cex=0.75)
+
+abline(h=16,col=alpha(16,0.5),lwd=3)
+mtext("Willamette (20, 5)",side=1,line=-1.55,cex=1,at=2600)
+mtext("j",side=3,line=0.1,cex=1.5,adj=0.99)
+#abline(fit.19)
+#abline(fit.20,col=alpha(16,0.75))
+axis(side=1,at=Jan_1s,labels=seq(2004,2012,1),las=2,cex.axis=1.5)
+
+
+#Potomac
+plot(DIN_DIP~num_Date,data=sort_Potomac,type="p",col="black",pch=16,main="",ylim=c(0.01,20000),log="y",xlab="Date",ylab="N:P ratio",yaxt="n",cex.axis=1,cex=0.75,las=2,cex.axis=2,xaxt="n")
+points(samp_PNPP~num_Date,data=sort_Potomac,type="p",col="gray",pch=1,cex=0.75)
+abline(h=16,col=alpha(16,0.5),lwd=3)
+#axis(side=2,cex.axis=2,at=c(0.01,0.1,1,10,100,1000),labels=c("0.01","0.1","1","10","100","1000"))
+axis(side=1,at=Jan_1s,labels=seq(2004,2012,1),las=2,cex.axis=1.5)
+
+mtext("Potomac (30, 4)",side=1,line=-1.55,cex=1,at=2400)
+mtext("k",side=3,line=0.1,cex=1.5,adj=0.99)
+#abline(fit.21)
+#abline(fit.22,col=alpha(16,0.75))
+
+
+#San Joaquin River
+plot(DIN_DIP~num_Date,data=sort_Sanjo,type="p",col="black",pch=16,main="",ylab="",xlab="",yaxt="n",ylim=c(0.01,10000),cex.axis=1,cex=0.75,las=2,cex.axis=2,log="y",xaxt="n")
+points(samp_PNPP~num_Date,data=sort_Sanjo,type="p",col="gray",pch=1,cex=0.75)
+abline(h=16,col=alpha(16,0.5),lwd=3)
+mtext("San Joaquin (26, 2)",side=1,line=-1.55,cex=1,at=2600)
+mtext("l",side=3,line=0.1,cex=1.5,adj=0.99)
+#abline(fit.23)
+#abline(fit.24,col=alpha(16,0.75))
+axis(side=1,at=Jan_1s,labels=seq(2004,2012,1),las=2,cex.axis=1.5)
+
+
+#Platte River
+plot(DIN_DIP~num_Date,data=sort_Platte,type="p",col="black",pch=16,ylim=c(0.01,20000),main="",xlab="",ylab="",yaxt="n",cex.axis=1,log="y",cex=0.75,las=2,line=0,cex.axis=2,xaxt="n")
+points(samp_PNPP~num_Date,data=sort_Platte,type="p",col="gray",pch=1,cex=0.75)
+abline(h=16,col=alpha(16,0.5),lwd=3)
+mtext("Platte (23, 1)",side=1,line=-1.55,cex=1,at=2750)
+mtext("m",side=3,line=0.1,cex=1.5,adj=0.99)
+axis(side=2,cex.axis=1,at=c(0.01,0.1,1,10,100,1000),labels=c(0.01,0.1,1,10,100,1000),cex.axis=2)
+mtext("Year",side=1,line=1,cex=1.5,at=7000)
+#abline(fit.25)
+#abline(fit.26,col=alpha(16,0.75))
+axis(side=1,at=Jan_1s,labels=seq(2004,2012,1),las=2,cex.axis=1.5)
+
+
+```
+
+
+# figure 8: plots of particulate N:P vs. dissolved N:P in time-series sites
+```{r}
+
+names(sort_Sope)
+summary(sort_Sope)
+
+par(mfrow=c(4,4))
+par(mar=c(0,0,2,0),oma=c(4,4.5,0.5,0.5))
+plot(log10(samp_PNPP)~log10(DIN_DIP),data=sort_Sope,ylim=c(-1,5),xlim=c(-1,5),cex=0.75,xaxt="n",yaxt="n",col=alpha(1,0.75),xaxt="n")
+abline(a=0,b=1)
+#axis(side=1,at=c(0,1,2,3,4),labels=c("1","10","100","1000","10000"),cex.axis=2)
+axis(side=2,at=c(0,1,2,3,4),labels=c("1","10","100","1000","10000"),cex.axis=2)
+mod_sope=lm(log10(samp_PNPP)~log10(DIN_DIP),data=sort_Sope)
+mod_org_sope=lm(log10(DON_DOP)~log10(DIN_DIP),data=sort_Sope)
+summary(mod_sope)
+summary(mod_org_sope)
+#abline(mod_sope,col=2)
+#mtext("Particulate N:P",line=2.5,at=-2.5,side=2,cex=1.5)
+mtext("Sope (1, 37)",side=3,line=-1.75,cex=1)
+mtext("a",side=3,line=0.1,cex=1.5,adj=0.99)
+mtext("1:1",side=3,line=-1.75,cex=1.5,adj=0.1,at=4)
+57/18.2
+
+
+plot(log10(samp_PNPP)~log10(DIN_DIP),data=sort_Shingle,ylim=c(-1,5),xlim=c(-1,5),cex=0.75,xaxt="n",yaxt="n",col=alpha(1,0.75),xaxt="n")
+abline(a=0,b=1)
+#axis(side=1,at=c(0,1,2,3,4),labels=c("1","10","100","1000","10000"),cex.axis=2)
+#axis(side=2,at=c(0,1,2,3,4),labels=c("1","10","100","1000","10000"),cex.axis=2)
+mod_Shingle=lm(log10(samp_PNPP)~log10(DIN_DIP),data=sort_Shingle)
+mod_org_shingle=lm(log10(DON_DOP)~log10(DIN_DIP),data=sort_Shingle)
+summary(mod_Shingle)
+summary(mod_org_shingle)
+#abline(mod_Shingle,col=2)
+mtext("Shingle (1, 69)",side=3,line=-1.75,cex=1)
+mtext("b",side=3,line=0.1,cex=1.5,adj=0.99)
+
+plot(log10(samp_PNPP)~log10(DIN_DIP),data=sort_Iowa,ylim=c(-1,5),xlim=c(-1,5),cex=0.75,xaxt="n",yaxt="n",col=alpha(1,0.75),xaxt="n")
+abline(a=0,b=1)
+#axis(side=1,at=c(0,1,2,3,4),labels=c("1","10","100","1000","10000"),cex.axis=2)
+#axis(side=2,at=c(0,1,2,3,4),labels=c("1","10","100","1000","10000"),cex.axis=2)
+mod_Iowa=lm(log10(samp_PNPP)~log10(DIN_DIP),data=sort_Iowa)
+mod_org_Iowa=lm(log10(DON_DOP)~log10(DIN_DIP),data=sort_Iowa)
+summary(mod_Iowa)
+summary(mod_org_Iowa)
+#abline(mod_Iowa,col=2)
+mtext("S. Fork Iowa (88, 1)",side=3,line=-1.75,cex=1)
+mtext("c",side=3,line=0.1,cex=1.5,adj=0.99)
+
+# Maple cr.
+plot(log10(samp_PNPP)~log10(DIN_DIP),data=sort_Maple,ylim=c(-1,5),xlim=c(-1,5),cex=0.75,xaxt="n",yaxt="n",col=alpha(1,0.75),xaxt="n")
+abline(a=0,b=1)
+#axis(side=1,at=c(0,1,2,3,4),labels=c("1","10","100","1000","10000"),cex.axis=2)
+#axis(side=2,at=c(0,1,2,3,4),labels=c("1","10","100","1000","10000"),cex.axis=2)
+mod_Maple=lm(log10(samp_PNPP)~log10(DIN_DIP),data=sort_Maple)
+summary(mod_Maple)
+summary(mod_org_Maple)
+#abline(mod_Maple,col=2)
+mtext("Maple (82, 1)",side=3,line=-1.75,cex=1)
+mtext("d",side=3,line=0.1,cex=1.5,adj=0.99)
+
+#Raritan
+plot(log10(samp_PNPP)~log10(DIN_DIP),data=sort_Raritan,ylim=c(-1,5),xlim=c(-1,5),cex=0.75,xaxt="n",yaxt="n",col=alpha(1,0.75),xaxt="n")
+abline(a=0,b=1)
+#axis(side=1,at=c(0,1,2,3,4),labels=c("1","10","100","1000","10000"),cex.axis=2)
+axis(side=2,at=c(0,1,2,3,4),labels=c("1","10","100","1000","10000"),cex.axis=2)
+mod_Raritan=lm(log10(samp_PNPP)~log10(DIN_DIP),data=sort_Raritan)
+summary(mod_Raritan)
+mod_org_Raritan=lm(log10(DON_DOP)~log10(DIN_DIP),data=sort_Raritan)
+summary(mod_org_Raritan)
+#abline(mod_Raritan,col=2)
+mtext("Raritan (25, 12)",side=3,line=-1.75,cex=1)
+#mtext("Dissolved N:P",side=1,at=2,line=2.5,cex=1.5)
+mtext("e",side=3,line=0.1,cex=1.5,adj=0.1)
+
+#Santa Ana
+plot(log10(samp_PNPP)~log10(DIN_DIP),data=sort_SantaAna,ylim=c(-1,5),xlim=c(-1,5),cex=0.75,xaxt="n",yaxt="n",col=alpha(1,0.75),xaxt="n")
+abline(a=0,b=1)
+#axis(side=1,at=c(0,1,2,3,4),labels=c("1","10","100","1000","10000"),cex.axis=2)
+#axis(side=2,at=c(0,1,2,3,4),labels=c("1","10","100","1000","10000"),cex.axis=2)
+mod_SantaAna=lm(log10(samp_PNPP)~log10(DIN_DIP),data=sort_SantaAna)
+summary(mod_SantaAna)
+mod_org_SantaAna=lm(log10(DON_DOP)~log10(DIN_DIP),data=sort_SantaAna)
+summary(mod_org_SantaAna)
+#abline(mod_SantaAna,col=2)
+mtext("Santa Ana (5, 22)",side=3,line=-1.75,cex=1)
+mtext("f",side=3,line=0.1,cex=1.5,adj=0.99)
+
+# Hooch
+#par(mfrow=c(2,4))
+#par(mar=c(0,0,0,0),oma=c(4,4.5,0.5,0.5))
+plot(log10(samp_PNPP)~log10(DIN_DIP),data=sort_Hooch,ylim=c(-1,5),xlim=c(-1,5),cex=0.75,xaxt="n",yaxt="n",col=alpha(1,0.75),xaxt="n")
+abline(a=0,b=1)
+#axis(side=1,at=c(0,1,2,3,4),labels=c("1","10","100","1000","10000"),cex.axis=2)
+#axis(side=2,at=c(0,1,2,3,4),labels=c("1","10","100","1000","10000"),cex.axis=2)
+mod_Hooch=lm(log10(samp_PNPP)~log10(DIN_DIP),data=sort_Hooch)
+summary(mod_Hooch)
+mod_org_Hooch=lm(log10(DON_DOP)~log10(DIN_DIP),data=sort_Hooch)
+summary(mod_org_Hooch)
+#abline(mod_Hooch,col=2)
+mtext("Chattahoochee (10, 16)",side=3,line=-1.75,cex=1)
+#mtext("Particulate N:P",at=-2.5,cex=1.5,line=2.5,side=2)
+mtext("g",side=3,line=0.1,cex=1.5,adj=0.99)
+
+#Neuse
+plot(log10(samp_PNPP)~log10(DIN_DIP),data=sort_Neuse,ylim=c(-1,5),xlim=c(-1,5),cex=0.75,xaxt="n",yaxt="n",col=alpha(1,0.75),xaxt="n")
+abline(a=0,b=1)
+#axis(side=1,at=c(0,1,2,3,4),labels=c("1","10","100","1000","10000"),cex.axis=2)
+#axis(side=2,at=c(0,1,2,3,4),labels=c("1","10","100","1000","10000"),cex.axis=2)
+mod_Neuse=lm(log10(samp_PNPP[-67])~log10(DIN_DIP[-67]),data=sort_Neuse)
+summary(mod_Neuse)
+mod_org_Neuse=lm(log10(DON_DOP)~log10(DIN_DIP),data=sort_Neuse)
+summary(mod_org_Neuse)
+#abline(mod_Hooch,col=2)
+mtext("Neuse (28, 7)",side=3,line=-1.75,cex=1)
+mtext("h",side=3,line=0.1,cex=1.5,adj=0.99)
+
+#Trinity
+plot(log10(samp_PNPP)~log10(DIN_DIP),data=sort_Trinity,ylim=c(-1,5),xlim=c(-1,5),cex=0.75,xaxt="n",yaxt="n",col=alpha(1,0.75),xaxt="n")
+abline(a=0,b=1)
+axis(side=2,at=c(0,1,2,3,4),labels=c("1","10","100","1000","10000"),cex.axis=2)
+#axis(side=1,at=c(0,1,2,3,4),labels=c("1","10","100","1000","10000"),cex.axis=2)
+#axis(side=2,at=c(0,1,2,3,4),labels=c("1","10","100","1000","10000"),cex.axis=2)
+mod_Trinity=lm(log10(samp_PNPP)~log10(DIN_DIP),data=sort_Trinity)
+summary(mod_Trinity)
+mod_org_Trinity=lm(log10(DON_DOP)~log10(DIN_DIP),data=sort_Trinity)
+summary(mod_org_Trinity)
+#abline(mod_Hooch,col=2)
+mtext("Trinity (14, 14)",side=3,line=-1.75,cex=1)
+mtext("i",side=3,line=0.1,cex=1.5,adj=0.99)
+mtext("Particulate N:P",at=7,cex=1.5,line=2.5,side=2)
+
+#Willamette
+plot(log10(samp_PNPP)~log10(DIN_DIP),data=sort_Willa,ylim=c(-1,5),xlim=c(-1,5),cex=0.75,xaxt="n",yaxt="n",col=alpha(1,0.75),xaxt="n")
+abline(a=0,b=1)
+axis(side=1,at=c(0,1,2,3,4),labels=c("1","10","100","1000","10000"),cex.axis=2)
+#axis(side=2,at=c(0,1,2,3,4),labels=c("1","10","100","1000","10000"),cex.axis=1)
+mod_Willamette=lm(log10(samp_PNPP)~log10(DIN_DIP),data=sort_Willa)
+summary(mod_Willamette)
+mod_org_Willamette=lm(log10(DON_DOP)~log10(DIN_DIP),data=sort_Willa)
+summary(mod_org_Willamette)
+#abline(mod_Hooch,col=2)
+mtext("Willamette (20, 5)",side=3,line=-1.75,cex=1)
+mtext("j",side=3,line=0.1,cex=1.5,adj=0.99)
+
+#Potomac
+plot(log10(samp_PNPP)~log10(DIN_DIP),data=sort_Potomac,ylim=c(-1,5),xlim=c(-1,5),cex=0.75,xaxt="n",yaxt="n",col=alpha(1,0.75),xaxt="n")
+abline(a=0,b=1)
+axis(side=1,at=c(0,1,2,3,4),labels=c("1","10","100","1000","10000"),cex.axis=2)
+#axis(side=2,at=c(0,1,2,3,4),labels=c("1","10","100","1000","10000"),cex.axis=1)
+mod_Potomac=lm(log10(samp_PNPP)~log10(DIN_DIP),data=sort_Potomac)
+summary(mod_Potomac)
+mod_org_Potomac=lm(log10(DON_DOP)~log10(DIN_DIP),data=sort_Potomac)
+summary(mod_org_Potomac)
+#abline(mod_Hooch,col=2)
+mtext("Potomac (30, 4)",side=3,line=-1.75,cex=1)
+mtext("k",side=3,line=0.1,cex=1.5,adj=0.99)
+
+#San Joaquin
+plot(log10(samp_PNPP)~log10(DIN_DIP),data=sort_Sanjo,ylim=c(-1,5),xlim=c(-1,5),cex=0.75,xaxt="n",yaxt="n",col=alpha(1,0.75),xaxt="n")
+abline(a=0,b=1)
+axis(side=1,at=c(0,1,2,3,4),labels=c("1","10","100","1000","10000"),cex.axis=2)
+#axis(side=2,at=c(0,1,2,3,4),labels=c("1","10","100","1000","10000"),cex.axis=1)
+mod_SanJoaquin=lm(log10(samp_PNPP)~log10(DIN_DIP),data=sort_Sanjo)
+mod_org_SanJoaquin=lm(log10(DON_DOP)~log10(DIN_DIP),data=sort_Sanjo)
+summary(mod_SanJoaquin)
+summary(mod_org_SanJoaquin)
+#abline(mod_Hooch,col=2)
+mtext("San Joaquin (26, 2)",side=3,line=-1.75,cex=1)
+#mtext("Dissolved N:P",at=3,cex=1.5,line=2.5,side=1)
+mtext("l",side=3,line=0.1,cex=1.5,adj=0.99)
+
+#Platte
+plot(log10(samp_PNPP)~log10(DIN_DIP),data=sort_Platte,ylim=c(-1,5),xlim=c(-1,5),cex=0.75,xaxt="n",yaxt="n",col=alpha(1,0.75),xaxt="n")
+abline(a=0,b=1)
+axis(side=2,at=c(0,1,2,3,4),labels=c("1","10","100","1000","10000"),cex.axis=2)
+axis(side=1,at=c(0,1,2,3,4),labels=c("1","10","100","1000","10000"),cex.axis=2)
+#axis(side=2,at=c(0,1,2,3,4),labels=c("1","10","100","1000","10000"),cex.axis=2)
+mod_Platte=lm(log10(samp_PNPP)~log10(DIN_DIP),data=sort_Platte)
+mod_org_Platte=lm(log10(DON_DOP)~log10(DIN_DIP),data=sort_Platte)
+summary(mod_Platte)
+summary(mod_org_Platte)
+#abline(mod_Hooch,col=2)
+mtext("Platte (23, 1)",side=3,line=-1.75,cex=1)
+mtext("m",side=3,line=0.1,cex=1.5,adj=0.99)
+mtext("Dissolved N:P",at=12,side=1,line=1.5,cex=1.5)
+#mtext("Particulate N:P",at=20000,side=2,line=2.1,cex=1.5)
+
+```
+
+

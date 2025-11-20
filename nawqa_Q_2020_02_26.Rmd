@@ -1,0 +1,571 @@
+---
+title: "nawqa_Q_2019_03_16"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+# load datasets
+```{r}
+#Load files
+
+nawqa=read.csv("/Users/davidmanning/Documents/NAWQA.NP.csv") # full dataset frodm Water Quality portal
+names(nawqa)
+summary(nawqa$Totalnitrogen__62855_RemarkCode) # 9081 records for TN + 48 estimated, 18 less than
+summary(nawqa$Phosphorus_wu_00665_RemarkCode) # 47105 records for TP + 3752 less than, 581 est 
+summary(nawqa$Orthophosphate__00671_RemarkCode) #37,272 DIP, + 11657 less than, 2062 est
+summary(nawqa$Ammonia_wf_00608_RemarkCode) #30928 NH4, + 17276 less than, 2913 est
+summary(nawqa$NO3.NO2_wf_00631_RemarkCode) #46,840 NO3 + 3842 less than, 633 est
+
+# lat/long
+latlong <- read.csv("/Users/davidmanning/Documents/nawqa.latlong.csv")
+
+# land use
+nawqa_landuse=read.csv("/Users/davidmanning/Documents/nawqa_landuse.csv")
+
+```
+
+
+```{r}
+library(dataRetrieval)
+library(lubridate)
+
+```
+
+# using dataframe 'dat' from nawqa_EAP_rmd_2020_02_26.Rmd
+```{r}
+
+head(dat)
+names(dat)
+sapply(dat,class)
+min(dat$Date)
+max(dat$Date)
+
+dailyDataAvailable <- whatNWISdata(siteNumbers=dat$site_no,
+                    service="dv", parameterCd="00060",statCd="00003")
+
+rem_sites=which(dat$stationId>100000000|dat$stationId>40000000) # remove site numbers that throw errors when included in dataRetrieval call
+unique(dat[-rem_sites,]$site_no) #check
+
+dailyDataAvailable <- whatNWISdata(siteNumbers=dat$site_no[-rem_sites],
+                    service="dv", parameterCd="00060",statCd="00003") # try again
+
+dat <- dat %>% mutate(
+  Date=as.Date(dat$resultDatetime,"%m/%d/%y")
+)
+
+dat_Q=dat[-rem_sites,]
+dat_Q$site_no[5564] # check
+
+length(dat_Q$site_no) #check length = 6909
+length(dat_Q$Date) # check
+
+dat_Q$site_no[544] # check
+
+```
+
+# loop through sites to get Q for each site/date
+```{r}
+length(dat_Q$site_no)
+sapply(dat_Q$site_no,class)
+
+dat_Q[543,1]
+dat_Q$site_no
+dat_Q$Date
+
+site_frames=list()
+uniq_site=unique(dat_Q$site_no)
+for(i in 1:length(unique(dat$site_no))){
+  site_frames[[i]] = subset(dat,site_no==uniq_site[i])
+}
+uniq_site[2]
+site_frames[[2]]
+length(site_frames)
+
+library(dataRetrieval)
+
+# USE THIS #
+sapply(dat_Q,class)
+site_Q_2=list()
+for(i in 1:length(dat_Q$site_no)){
+site_Q_2[[i]] = readNWISdv(siteNumbers=dat_Q$site_no[i],
+                      parameterCd="00060",
+                      startDate=dat_Q$Date[i],
+                      endDate=dat_Q$Date[i])
+}
+
+
+site_Q_2[[2]]
+Q_frame=do.call("rbind",site_Q_2)
+Q_frame[4000:4100,] # check
+Q_csv=write.csv(Q_frame,file="nawqa_Q_2020_02_26.csv") # save file
+
+length(Q_frame[,1]) # check length = 5608 rows
+length(unique(Q_frame$site_no)) # 195 sites
+
+```
+
+# join Q dataset with nawqa dataset by 'site_no' and 'Date'
+```{r}
+#Q_frame=read.csv("~/NAWQA R1/nawqa_Q_2019_11_06.csv") # if using .csv file, site_no may be incorrect (lacks "0" in front of site_no becaue it gets removed when converted to .csv, I think?)
+
+head(Q_frame)
+plot(Q_frame$X_00060_00003~Q_frame$Date)
+
+nrow(Q_frame) # check nrow = 5608
+unique(Q_frame$site_no)
+
+Q_merge=inner_join(dat,Q_frame,by=c("site_no","Date"),copy=FALSE)
+length(dat[,1])
+length(Q_merge[,1]) #5740
+head(Q_merge)
+
+#nawqa_Q_file=write.csv(Q_merge,file="nawqa_Q_file.csv")
+
+#Q_file=read.csv("/Users/davidmanning/nawqa_Q_file.csv")
+
+
+# ignore below #
+#plot(Q_file$X_00060_00003~Q_file$Date)
+#unique(Q_merge$site_no)
+#nrow(Q_merge)
+#names(Q_merge)
+#Q_merge$Date=as.Date(Q_merge$Date)
+#samp_dat=data.frame(dat$stationId,dat$samp_PNcorr,dat$samp_PPcorr,as.Date(dat$Date))
+#colnames(samp_dat)=c("stationId","samp_PNcorr","samp_PPcorr","Date")
+
+#Q_merge1=inner_join(Q_merge,samp_dat,copy=FALSE)
+#nrow(Q_merge1)
+
+
+
+```
+
+# Table 1. parameter estimates for linear mixed-effects models predicting N and P concentrations in watersheds of the continental US
+```{r}
+# update 2019 05 08 - replaced watershed area with Q in linear models.
+#nawqa_Q=read.csv("/Users/davidmanning/nawqa_Q_file.csv")
+#head(nawqa_Q)
+Q_merge <- Q_merge %>% mutate(
+  Q_Ls=Q_merge$X_00060_00003*28.31
+)
+Q_merge$Q_Ls[1:5]
+head(Q_merge)
+
+nrow(Q_merge)
+
+sapply(Q_merge,class)
+unique(Q_merge$site_no)
+
+
+#install.packages('lme4')
+#install.packages('lmerTest')
+library(lme4)
+library(lmerTest)
+
+
+#install.packages('MuMIn')
+library(MuMIn)
+
+pCRO=Q_merge$PctCrop2006Ws
+pHAY=Q_merge$PctHay2006Ws
+pURB=Q_merge$PctUrbHi2006Ws+Q_merge$PctUrbMd2006Ws+Q_merge$PctUrbLo2006Ws
+pFOR=Q_merge$PctMxFst2006Ws+Q_merge$PctDecid2006Ws+Q_merge$PctConif2006Ws
+
+propCRO=pCRO/100
+propHAY=pHAY/100
+propURB=pURB/100
+propFOR=pFOR/100
+
+# scaled vars
+zWSA=scale(log10(Q_merge$WsAreaSqKm))
+zCRO=scale(propCRO)
+zHAY=scale(propHAY)
+zURB=scale(propURB)
+zFOR=scale(propFOR)
+
+Q_zero=which(Q_merge$Q_Ls<=0)
+Q_merge[Q_zero,]
+zQ=scale(log10(Q_merge$Q_Ls[-Q_zero]))
+zQ1=scale(log10(Q_pos$Q_Ls))
+station.fac=as.factor(Q_merge$stationId)
+
+Q_mods=data.frame(Q_merge,propCRO,propHAY,propURB,propFOR,zCRO,zHAY,zURB,zFOR,zWSA,station.fac)
+Q_pos=Q_mods[-Q_zero,]
+Q_pos=data.frame(Q_pos,zQ)
+head(Q_pos)
+unique(Q_pos$stationId)
+
+TP_inf=which(log10(Q_pos$TP_mc)==-Inf)
+# linear mixed-effects models
+mods=list()
+mods[[1]]=lmer(log10(TN_mc)~log10(TP_mc)+log10(Q_Ls)+propCRO+propHAY+propURB+propFOR+(1|station.fac),data=Q_pos[-TP_inf,])
+summary(mods[[1]])
+fixef(mods[[1]])
+r.squaredGLMM(mods[[1]])
+summary(Q_pos)
+
+
+mods[[2]]=lmer(log10(TN_mc)~scale(log10(TP_mc))+zQ+zCRO+zHAY+zURB+zFOR+(1|station.fac),data=Q_pos)
+summary(mods[[2]])
+fixef(mods[[2]])
+
+
+mods[[3]]=lmer(log10(DIN)~log10(DIP_mc)+log10(Q_Ls)+propCRO+propHAY+propURB+propFOR+(1|station.fac),data=Q_pos)
+summary(mods[[3]])
+fixef(mods[[3]])
+r.squaredGLMM(mods[[3]])
+
+
+mods[[4]]=lmer(log10(DIN)~scale(log10(DIP_mc))+zQ+zCRO+zHAY+zURB+zFOR+(1|station.fac),data=Q_pos)
+summary(mods[[4]])
+fixef(mods[[4]])
+
+mods[[5]]=lmer(log10(samp_PNcorr)~log10(samp_PPcorr)+log10(Q_Ls)+propCRO+propHAY+propURB+propFOR+(1|station.fac),data=Q_pos)
+summary(mods[[5]])
+fixef(mods[[5]])
+r.squaredGLMM(mods[[5]])
+
+mods[[6]]=lmer(log10(samp_PNcorr)~scale(log10(samp_PPcorr))+zQ+zCRO+zHAY+zURB+zFOR+(1|station.fac),data=Q_pos)
+summary(mods[[6]])
+fixef(mods[[6]])
+
+## P models ##
+mods[[7]]=lmer(log10(TP_mc)~log10(TN_mc)+log10(Q_Ls)+propCRO+propHAY+propURB+propFOR+(1|station.fac),data=Q_pos)
+summary(mods[[7]])
+fixef(mods[[7]])
+r.squaredGLMM(mods[[7]])
+
+mods[[8]]=lmer(log10(TP_mc)~scale(log10(TN_mc))+zQ+zCRO+zHAY+zURB+zFOR+(1|station.fac),data=Q_pos)
+summary(mods[[8]])
+fixef(mods[[8]])
+
+mods[[9]]=lmer(log10(DIP_mc)~log10(DIN)+log10(Q_Ls)+propCRO+propHAY+propURB+propFOR+(1|station.fac),data=Q_pos)
+summary(mods[[9]])
+fixef(mods[[9]])
+r.squaredGLMM(mods[[9]])
+
+mods[[10]]=lmer(log10(DIP_mc)~scale(log10(DIN))+zQ+zCRO+zHAY+zURB+zFOR+(1|station.fac),data=Q_pos)
+summary(mods[[10]])
+fixef(mods[[10]])
+r.squaredGLMM(mods[[10]])
+
+mods[[11]]=lmer(log10(samp_PPcorr)~log10(samp_PNcorr)+log10(Q_Ls)+propCRO+propHAY+propURB+propFOR+(1|station.fac),data=Q_pos)
+summary(mods[[11]])
+fixef(mods[[11]])
+r.squaredGLMM(mods[[11]])
+
+mods[[12]]=lmer(log10(samp_PPcorr)~scale(log10(samp_PNcorr))+zQ+zCRO+zHAY+zURB+zFOR+(1|station.fac),data=Q_pos)
+summary(mods[[12]])
+fixef(mods[[12]])
+
+
+# remove N and P as predictors in the models
+mods[[13]]=lmer(log10(TN_mc)~zQ+zCRO+zHAY+zURB+zFOR+(1|station.fac),data=Q_pos)
+summary(mods[[13]])
+fixef(mods[[13]])
+
+mods[[14]]=lmer(log10(TP_mc)~zQ+zCRO+zHAY+zURB+zFOR+(1|station.fac),data=Q_pos[-TP_inf,])
+summary(mods[[14]])
+fixef(mods[[14]])
+
+mods[[15]]=lmer(log10(DIN)~zQ+zCRO+zHAY+zURB+zFOR+(1|station.fac),data=Q_pos)
+summary(mods[[15]])
+fixef(mods[[15]])
+
+mods[[16]]=lmer(log10(DIP_mc)~zQ+zCRO+zHAY+zURB+zFOR+(1|station.fac),data=Q_pos)
+summary(mods[[16]])
+fixef(mods[[16]])
+
+mods[[17]]=lmer(log10(samp_PNcorr)~zQ+zCRO+zHAY+zURB+zFOR+(1|station.fac),data=Q_pos)
+summary(mods[[17]])
+fixef(mods[[17]])
+
+mods[[18]]=lmer(log10(samp_PPcorr)~zQ+zCRO+zHAY+zURB+zFOR+(1|station.fac),data=Q_pos)
+summary(mods[[18]])
+fixef(mods[[18]])
+
+# unstandardized parms
+mods[[19]]=lmer(log10(TN_mc)~log10(Q_Ls)+propCRO+propHAY+propURB+propFOR+(1|station.fac),data=Q_pos)
+summary(mods[[19]])
+r.squaredGLMM(mods[[19]])
+
+mods[[20]]=lmer(log10(TP_mc)~log10(Q_Ls)+propCRO+propHAY+propURB+propFOR+(1|station.fac),data=Q_pos[-TP_inf,])
+summary(mods[[20]])
+r.squaredGLMM(mods[[20]])
+
+mods[[21]]=lmer(log10(DIN)~log10(Q_Ls)+propCRO+propHAY+propURB+propFOR+(1|station.fac),data=Q_pos)
+summary(mods[[21]])
+r.squaredGLMM(mods[[21]])
+
+
+mods[[22]]=lmer(log10(DIP_mc)~log10(Q_Ls)+propCRO+propHAY+propURB+propFOR+(1|station.fac),data=Q_pos)
+summary(mods[[22]])
+r.squaredGLMM(mods[[22]])
+
+
+mods[[23]]=lmer(log10(samp_PNcorr)~log10(Q_Ls)+propCRO+propHAY+propURB+propFOR+(1|station.fac),data=Q_pos)
+summary(mods[[23]])
+r.squaredGLMM(mods[[23]])
+
+
+mods[[24]]=lmer(log10(samp_PPcorr)~log10(Q_Ls)+propCRO+propHAY+propURB+propFOR+(1|station.fac),data=Q_pos)
+summary(mods[[24]])
+r.squaredGLMM(mods[[24]])
+
+10^-0.387
+10^-1.092
+10^-
+```
+
+# merge slopes from Q vs. N:P ratio models with larger data.frame that contains land use data
+```{r}
+sapply(Q_series,class)
+summary(DINDIP_Q_landuse$Estimate)
+
+DINDIP_Q_landuse=inner_join(Q_series,DINDIP_Q_coefs,by="site_no",copy=FALSE)
+unique(DINDIP_Q_landuse$site_no) # check - should be 94 sites.
+
+TNTP_Q_landuse=inner_join(Q_series,TNTP_Q_coefs,by="site_no",copy=FALSE)
+unique(TNTP_Q_landuse$site_no) # check - should be 94 sites.
+
+PNPP_Q_landuse=inner_join(Q_series,PNPP_Q_coefs,by="site_no",copy=FALSE)
+unique(PNPP_Q_landuse$site_no) # check - should be 94 sites.
+
+DINDIP_Q_landuse = DINDIP_Q_landuse %>% mutate(
+  pURB=PctUrbLo2006Ws+PctUrbMd2006Ws+PctUrbHi2006Ws
+)
+
+DINDIP_Q_landuse = DINDIP_Q_landuse %>% mutate(
+  pFOR=PctDecid2006Ws+PctConif2006Cat+PctMxFst2006Ws
+)
+
+DINDIP_Q_landuse = DINDIP_Q_landuse %>% mutate(
+  pAG=PctCrop2006Ws+PctHay2006Ws
+)
+
+length(DINDIP_Q_landuse$pAG)
+names(DINDIP_Q_landuse)
+DINDIP_Q_landuse_v1=unique(DINDIP_Q_landuse[,c("Estimate","slope_diffs","pURB","pFOR","pAG")])
+
+par(mfrow=c(1,1))
+plot(DINDIP_Q_landuse_v1$slope_diffs~DINDIP_Q_landuse_v1$pAGR)
+clip(-5,95.5,-1,1)
+abline(h=0)
+plot(DINDIP_Q_landuse_v1$Estimate~DINDIP_Q_landuse_v1$pURB)
+clip(-5,95.5,-1,1)
+abline(h=0)
+plot(DINDIP_Q_landuse_v1$Estimate~DINDIP_Q_landuse_v1$pFOR)
+clip(-5,95.5,-1,1)
+abline(h=0)
+
+##################
+# TN:TP Q slopes #
+summary(TNTP_Q_landuse$Estimate)
+
+
+TNTP_Q_landuse = TNTP_Q_landuse %>% mutate(
+  pURB=PctUrbLo2006Ws+PctUrbMd2006Ws+PctUrbHi2006Ws
+)
+
+TNTP_Q_landuse = TNTP_Q_landuse %>% mutate(
+  pFOR=PctDecid2006Ws+PctConif2006Cat+PctMxFst2006Ws
+)
+
+TNTP_Q_landuse = TNTP_Q_landuse %>% mutate(
+  pAGR=PctCrop2006Ws+PctHay2006Ws
+)
+
+length(TNTP_Q_landuse$pAGR)
+names(TNTP_Q_landuse)
+TNTP_Q_landuse_v1=unique(TNTP_Q_landuse[,c("Estimate","slope_diffs","pURB","pFOR","pAGR")])
+
+plot(TNTP_Q_landuse_v1$slope_diffs~TNTP_Q_landuse_v1$pAGR)
+points(TNTP_Q_landuse_v1$Estimate~TNTP_Q_landuse_v1$pAGR,)
+plot(TNTP_Q_landuse_v1$slope_diffs~TNTP_Q_landuse_v1$pURB)
+plot(TNTP_Q_landuse_v1$slope_diffs~TNTP_Q_landuse_v1$pFOR)
+
+
+
+###############
+# PNPP slopes #
+summary(PNPP_Q_landuse$Estimate)
+which(PNPP_Q_landuse$Estimate<0)
+PNPP_Q_landuse[2212:2239,]
+
+PNPP_Q_landuse = PNPP_Q_landuse %>% mutate(
+  pURB=PctUrbLo2006Ws+PctUrbMd2006Ws+PctUrbHi2006Ws
+)
+
+PNPP_Q_landuse = PNPP_Q_landuse %>% mutate(
+  pFOR=PctDecid2006Ws+PctConif2006Cat+PctMxFst2006Ws
+)
+
+PNPP_Q_landuse = PNPP_Q_landuse %>% mutate(
+  pAGR=PctCrop2006Ws+PctHay2006Ws
+)
+
+length(PNPP_Q_landuse$pAGR)
+names(PNPP_Q_landuse)
+PNPP_Q_landuse_v1=unique(PNPP_Q_landuse[,c("Estimate","slope_diffs","pURB","pFOR","pAGR")])
+
+plot(PNPP_Q_landuse_v1$slope_diffs~PNPP_Q_landuse_v1$pAGR)
+plot(PNPP_Q_landuse_v1$slope_diffs~PNPP_Q_landuse_v1$pURB)
+plot(PNPP_Q_landuse_v1$slope_diffs~PNPP_Q_landuse_v1$pFOR)
+
+
+
+
+length(PNPP_Q_landuse_v1$Estimate)
+
+# which slopes are positive?
+count(DINDIP_Q_landuse_v1$slope_diffs>0) #62/94
+count(TNTP_Q_landuse_v1$slope_diffs>0) # 42/94
+count(PNPP_Q_landuse_v1$slope_diffs>0) # 21/94
+94-21
+
+summary(lm(DINDIP_Q_landuse_v1$slope_diffs~DINDIP_Q_landuse_v1$pAG))
+summary(lm(DINDIP_Q_landuse_v1$slope_diffs~DINDIP_Q_landuse_v1$pURB))
+summary(lm(DINDIP_Q_landuse_v1$slope_diffs~DINDIP_Q_landuse_v1$pFOR))
+
+summary(lm(TNTP_Q_landuse_v1$slope_diffs~TNTP_Q_landuse_v1$pAG))
+summary(lm(TNTP_Q_landuse_v1$slope_diffs~TNTP_Q_landuse_v1$pURB))
+summary(lm(TNTP_Q_landuse_v1$slope_diffs~TNTP_Q_landuse_v1$pFOR))
+
+summary(lm(PNPP_Q_landuse_v1$slope_diffs~PNPP_Q_landuse_v1$pAG))
+summary(lm(PNPP_Q_landuse_v1$slope_diffs~PNPP_Q_landuse_v1$pURB))
+summary(lm(PNPP_Q_landuse_v1$slope_diffs~PNPP_Q_landuse_v1$pFOR))
+
+```
+
+
+# Figure 5 - N:P ratio log-log slopes from aQ^b relationship vs. land use.
+```{r}
+######### 9-panel plot
+
+
+par(mfrow=c(3,3))
+par(mar=c(5,6,2,2))
+par(xpd=FALSE)
+plot(DINDIP_Q_landuse_v1$slope_diffs~DINDIP_Q_landuse_v1$pAG,xlab="% agriculture",ylab="log-log slope",cex=1.5,cex.lab=1.5,cex.axis=1.5,xlim=c(0,100))
+abline(h=0)
+mtext("a",at=99)
+plot(DINDIP_Q_landuse_v1$slope_diffs~DINDIP_Q_landuse_v1$pURB,xlab="% urban",ylab="",cex=1.5,cex.lab=1.5,cex.axis=1.5,main="Dissolved N:P",xlim=c(0,100))
+abline(h=0)
+mtext("b",at=99)
+plot(DINDIP_Q_landuse_v1$slope_diffs~DINDIP_Q_landuse_v1$pFOR,xlab="% forest",ylab="",cex=1.5,cex.lab=1.5,cex.axis=1.5,xlim=c(0,100))
+abline(h=0)
+mtext("c",at=99)
+
+plot(TNTP_Q_landuse_v1$slope_diffs~TNTP_Q_landuse_v1$pAGR,xlab="% agriculture",ylab="log-log slope",cex=1.5,cex.lab=1.5,cex.axis=1.5,xlim=c(0,100))
+abline(h=0)
+mtext("d",at=99)
+plot(TNTP_Q_landuse_v1$slope_diffs~TNTP_Q_landuse_v1$pURB,xlab="% urban",ylab="",cex=1.5,cex.lab=1.5,cex.axis=1.5,main="Total N:P",xlim=c(0,100))
+abline(h=0)
+mtext("e",at=99)
+plot(TNTP_Q_landuse_v1$slope_diffs~TNTP_Q_landuse_v1$pFOR,xlab="% forest",ylab="",cex=1.5,cex.lab=1.5,cex.axis=1.5,xlim=c(0,100))
+abline(h=0)
+mtext("f",at=99)
+
+plot(PNPP_Q_landuse_v1$slope_diffs~PNPP_Q_landuse_v1$pAGR,xlab="% agriculture",ylab="log-log slope",cex=1.5,cex.lab=1.5,cex.axis=1.5,xlim=c(0,100))
+abline(h=0)
+mtext("g",at=99)
+plot(PNPP_Q_landuse_v1$slope_diffs~PNPP_Q_landuse_v1$pURB,xlab="% urban",ylab="",cex=1.5,cex.lab=1.5,cex.axis=1.5,main="Particulate N:P",xlim=c(0,100))
+abline(h=0)
+mtext("h",at=99)
+plot(PNPP_Q_landuse_v1$slope_diffs~PNPP_Q_landuse_v1$pFOR,xlab="% forest",ylab="",cex=1.5,cex.lab=1.5,cex.axis=1.5,xlim=c(0,100))
+abline(h=0)
+mtext("i",at=99)
+
+
+```
+
+
+
+
+
+## USING power-law model to exlore effects of flow on N:P ratios - log-log slopes (b coefficients)
+# models for Q vs. N:P ratio
+```{r}
+
+Q_merge$DIN_DIP=Q_merge$DIN/Q_merge$DIP_mc*31/14
+Q_merge$TN_TP=Q_merge$TN_mc/Q_merge$TP_mc*31/14
+Q_merge$samp_PNPP=Q_merge$samp_PNcorr/Q_merge$samp_PPcorr*31/14
+
+summary(Q_merge$samp_PNPP)
+which(is.na(Q_merge$DIN_DIP))
+summary(Q_merge$DIN_DIP)
+mod.Q=lm(log10(Q_merge$DIN_SRP)~log10(Q_merge$X_00060_00003+0.1):site_no-1,data=Q_merge)
+
+site_counts=count(Q_merge$site_no)
+omit_sites=site_counts[which(site_counts$freq<=11),]
+Q_series=Q_merge[-which(Q_merge$site_no%in%omit_sites$x),]
+head(Q_series)
+length(unique(Q_series$site_no))
+summary(Q_series$DIN_DIP)
+
+zeroQ=which(Q_series$Q<=0)
+library(dplyr)
+Q_series <- Q_series %>% mutate(
+  Q_Ls=X_00060_00003*28.31
+)
+
+mod.Q2=lm(log10(Q_series$DIN_DIP)~log10(Q_series$Q_Ls+0.1)*site_no,data=Q_series)
+summary(mod.Q2)
+summary(mod.Q2)$coefficients
+Q_coefs=summary(mod.Q2)$coefficients
+nrow(Q_coefs)
+DINDIP_Q_coefs=data.frame(Q_coefs[c(2,96:188),],as.character(sort(unique(Q_series$site_no))))
+colnames(DINDIP_Q_coefs)=c("Estimate","SE","tval","pval","site_no")
+#Q_coef=write.csv(summary(mod.Q2)$coefficients,file="Q_coef.csv")
+
+mod.Q.disNP=lm(log10(Q_series$DIN_DIP)~log10(Q_series$Q_Ls+0.1):site_no-1,data=Q_series)
+summary(mod.Q.disNP)
+confint(mod.Q.disNP)
+
+DINDIP_Q_coefs=DINDIP_Q_coefs %>% mutate(
+  slope_diffs=c(Estimate[1],Estimate[2:length(Estimate)]+Estimate[1])
+)
+
+DINDIP_Q_loglog=write.csv(DINDIP_Q_coefs,file="DINDIP_Q_loglog.csv")
+
+count(DINDIP_Q_coefs$pval<=0.05)
+confint(mod.Q2)
+
+#site_1=subset(Q_series,site_no=="01312000")
+
+#par(mfrow=c(1,1))
+#plot(log10(site_1$DIN_SRP)~log10(site_1$X_00060_00003))
+#abline(a=2.09-0.81,b=0.478+-0.14)
+
+which(Q_series$TN_TP=="Inf") #3450, 5291
+summary(Q_series$TN_TP)
+#which(Q_series$TN_TP==Inf)
+mod_Q_TNTP=lm(log10(Q_series$TN_TP[-c(3450,5291)])~log10(Q_series$Q_Ls[-c(3450,5291)]+0.1)*site_no[-c(3450,5291)],data=Q_series)
+summary(mod_Q_TNTP)
+TNTP_coef=summary(mod_Q_TNTP)$coefficients
+#TNTP_coef=write.csv(summary(mod_Q_TNTP)$coefficients,file="TNTP_coef.csv")
+TNTP_Q_coefs=data.frame(TNTP_coef[c(2,96:188),],sort(unique(Q_series$site_no)))
+colnames(TNTP_Q_coefs)=c("Estimate","SE","tval","pval","site_no")
+TNTP_Q_coefs=TNTP_Q_coefs %>% mutate(
+  slope_diffs=c(Estimate[1],Estimate[2:length(Estimate)]+Estimate[1])
+)
+
+TNTP_Q_loglog=write.csv(TNTP_Q_coefs,file="TNTP_Q_coefs.csv")
+
+mod_Q_PNPP=lm(log10(Q_series$samp_PNPP)~log10(Q_series$Q_Ls+0.1)*site_no,data=Q_series)
+summary(mod_Q_PNPP)
+PNPP_coef=summary(mod_Q_PNPP)$coefficients
+PNPP_Q_coefs=data.frame(PNPP_coef[c(2,96:188),],as.character(sort(unique(Q_series$site_no))))
+sapply(PNPP_Q_coefs,class)
+colnames(PNPP_Q_coefs)=c("Estimate","SE","tval","pval","site_no")
+#PNPP_coef=write.csv(summary(mod_Q_PNPP)$coefficients,file="PNPP_coef.csv")
+PNPP_Q_coefs=PNPP_Q_coefs %>% mutate(
+  slope_diffs=c(Estimate[1],Estimate[2:length(Estimate)]+Estimate[1])
+)
+
+#PNPP_Q_loglog=write.csv(PNPP_Q_coefs,file="PNPP_Q_loglog.csv")
+
+```
+
+

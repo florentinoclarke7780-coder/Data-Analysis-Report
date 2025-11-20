@@ -1,0 +1,7 @@
+LandUseType,HighTP,Freq
+Agricultural,FALSE,23
+Urban,FALSE,28
+Forest,FALSE,39
+Agricultural,TRUE,17
+Urban,TRUE,12
+Forest,TRUE,1
